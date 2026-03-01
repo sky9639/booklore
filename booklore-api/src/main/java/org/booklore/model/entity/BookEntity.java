@@ -62,6 +62,10 @@ public class BookEntity {
     @Column(name = "deleted")
     @Builder.Default
     private Boolean deleted = Boolean.FALSE;
+	
+	@Column(name = "printed", nullable = false)
+	@Builder.Default
+	private Boolean printed = Boolean.FALSE;
 
     @Column(name = "deleted_at")
     private Instant deletedAt;

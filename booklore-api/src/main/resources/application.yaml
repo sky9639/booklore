@@ -24,6 +24,7 @@ app:
   disk-type: ${DISK_TYPE:LOCAL}
 
 server:
+  address: 0.0.0.0
   max-http-header-size: 128KB
   forward-headers-strategy: native
   port: ${BOOKLORE_PORT:6060}

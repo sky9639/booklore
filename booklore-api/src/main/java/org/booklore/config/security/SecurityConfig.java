@@ -227,6 +227,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
                         .requestMatchers(publicEndpoints.toArray(new String[0])).permitAll()
+						.requestMatchers("/api/print/**").permitAll()
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(dualJwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

@@ -18,6 +18,9 @@ import {EditMetadataGuard} from './core/security/guards/edit-metdata.guard';
 
 export const routes: Routes = [
   {
+    path: 'print/:bookId',loadComponent: () => import('./modules/print-workspace/print-workspace.component').then(m => m.PrintWorkspaceComponent)
+  },
+  {
     path: '',
     canActivate: [SetupRedirectGuard],
     pathMatch: 'full',

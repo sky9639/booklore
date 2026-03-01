@@ -1,0 +1,20 @@
+{
+  "/api": {
+    "target": "http://backend:6060",
+    "secure": false,
+    "changeOrigin": true
+  },
+  "/ws": {
+    "target": "ws://backend:6060",
+    "ws": true,
+    "changeOrigin": true
+  },
+  "/print-api": {
+    "target": "http://print-engine:5000",
+    "secure": false,
+    "changeOrigin": true,
+    "pathRewrite": {
+      "^/print-api": ""
+    }
+  }
+}
