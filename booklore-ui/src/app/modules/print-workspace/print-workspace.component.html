@@ -1,0 +1,104 @@
+<div class="print-container">
+
+  <div class="print-header">
+    <h2>Print Workspace</h2>
+    <button class="back-btn" (click)="goBack()">返回</button>
+  </div>
+
+  <div class="print-controls">
+
+    <div class="form-row">
+      <label>Paper Thickness (mm)</label>
+      <input type="number"
+             step="0.01"
+             [(ngModel)]="state.paperThickness"
+             (ngModelChange)="recalculateSpine()">
+    </div>
+
+    <div class="form-row">
+      <label>Page Count</label>
+      <input type="number"
+             [(ngModel)]="state.pageCount"
+             (ngModelChange)="recalculateSpine()">
+    </div>
+
+    <div class="form-row">
+      <label>Spine Mode</label>
+      <select [(ngModel)]="spineMode">
+        <option value="auto">Auto</option>
+        <option value="manual">Manual</option>
+      </select>
+    </div>
+
+    <div class="form-row">
+      <label>Back Mode</label>
+      <select [(ngModel)]="backMode">
+        <option value="auto">Auto</option>
+        <option value="manual">Manual</option>
+      </select>
+    </div>
+
+    <div class="button-row">
+      <button class="btn-primary"
+              (click)="generatePreview()"
+              [disabled]="loading">
+        生成预览
+      </button>
+
+      <button class="btn-success"
+              (click)="generatePdf()"
+              [disabled]="loading">
+        生成 PDF
+      </button>
+    </div>
+
+  </div>
+
+  <div class="status" *ngIf="loading">
+    Processing...
+  </div>
+
+  <div class="preview-section" *ngIf="state.previewUrl">
+
+    <h3>Preview</h3>
+
+    <div class="preview-thumb"
+         (click)="openLightbox()">
+
+      <img [src]="state.previewUrl" alt="preview">
+
+      <div class="overlay">
+        👁
+      </div>
+
+    </div>
+
+    <div class="spine-info" *ngIf="previewData">
+      Page Count: {{previewData.page_count}}
+      <br>
+      Spine Width: {{previewData.spine_width_mm}} mm
+    </div>
+
+  </div>
+
+  <div class="download-section"
+       *ngIf="state.pdfPath">
+
+    <h3>PDF Ready</h3>
+
+    <button class="btn-download"
+            (click)="downloadPdf()">
+      下载 PDF
+    </button>
+
+  </div>
+
+</div>
+
+<div class="image-modal"
+     *ngIf="showLightbox"
+     (click)="closeLightbox()">
+
+  <img [src]="state.previewUrl">
+
+</div>
