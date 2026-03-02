@@ -1,8 +1,9 @@
-import { Component, OnInit } from '@angular/core';
-import { ActivatedRoute } from '@angular/router';
-import { HttpClient } from '@angular/common/http';
-import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
+import {CommonModule} from '@angular/common';
+import {Component, OnInit, inject} from '@angular/core';
+import {FormsModule} from '@angular/forms';
+import {ActivatedRoute} from '@angular/router';
+import {BookService} from '../../features/book/service/book.service';
+import {PrintWorkspaceService} from './print-workspace.service';
 
 @Component({
   standalone: true,
@@ -12,6 +13,9 @@ import { FormsModule } from '@angular/forms';
   imports: [CommonModule, FormsModule]
 })
 export class PrintWorkspaceComponent implements OnInit {
+  private readonly route = inject(ActivatedRoute);
+  private readonly bookService = inject(BookService);
+  private readonly printWorkspaceService = inject(PrintWorkspaceService);
 
   bookId!: number;
 
@@ -40,11 +44,6 @@ export class PrintWorkspaceComponent implements OnInit {
 
   previewData: any = null;
 
-  constructor(
-    private route: ActivatedRoute,
-    private http: HttpClient
-  ) {}
-
   ngOnInit() {
     this.route.params.subscribe(p => {
       this.bookId = +p['bookId'];
@@ -60,10 +59,9 @@ export class PrintWorkspaceComponent implements OnInit {
 
   // ===== 载入书籍信息 =====
   loadBookInfo() {
-    this.http.get<any>(`/api/books/${this.bookId}`)
+    this.bookService.getBookByIdFromAPI(this.bookId, false)
       .subscribe(res => {
-        this.state.bookName = res.title ?? '';
-        this.state.pageCount = res.pageCount ?? this.state.pageCount;
+        this.state.bookName = res.metadata?.title ?? '';
         this.recalculateSpine();
       });
   }
@@ -82,15 +80,12 @@ export class PrintWorkspaceComponent implements OnInit {
     this.loading = true;
     this.state.previewUrl = null;
 
-    this.http.post<any>(
-      `/api/print/${this.bookId}/preview`,
-      {
-        paperThickness: this.state.paperThickness,
-        pageCount: this.state.pageCount,
-        spineMode: this.spineMode,
-        backMode: this.backMode
-      }
-    ).subscribe({
+    this.printWorkspaceService.generatePreview(this.bookId, {
+      paperThickness: this.state.paperThickness,
+      pageCount: this.state.pageCount,
+      spineMode: this.spineMode,
+      backMode: this.backMode
+    }).subscribe({
       next: res => {
 
         if (res.preview_png) {
@@ -112,15 +107,12 @@ export class PrintWorkspaceComponent implements OnInit {
 
     this.loading = true;
 
-    this.http.post<any>(
-      `/api/print/${this.bookId}/pdf`,
-      {
-        paperThickness: this.state.paperThickness,
-        pageCount: this.state.pageCount,
-        spineMode: this.spineMode,
-        backMode: this.backMode
-      }
-    ).subscribe({
+    this.printWorkspaceService.generatePdf(this.bookId, {
+      paperThickness: this.state.paperThickness,
+      pageCount: this.state.pageCount,
+      spineMode: this.spineMode,
+      backMode: this.backMode
+    }).subscribe({
       next: res => {
 
         if (res.pdf_path) {
