@@ -1,16 +1,11 @@
-# ==========================
-# 1. 先全局忽略 E:\AI\ 下所有内容
-# ==========================
+# 5090 电脑：只追踪 booklore_AI_Service 目录
 /*
+!/booklore_AI_Service/
+!/.gitignore
 
-# ==========================
-# 2. 只放行你要管理的目录/文件
-# ==========================
-!/booklore_AI_Service/  # 放行 AI 服务目录（让 Git 管理它）
-!/.gitignore            # 放行 .gitignore 本身
-
-# ==========================
-# 3. 在 booklore_AI_Service 内部，忽略无用缓存
-# ==========================
+# 通用：忽略 Python 缓存
 /booklore_AI_Service/__pycache__/
 /booklore_AI_Service/*.pyc
+
+# NAS 电脑：忽略 AI 目录（此规则对 5090 无影响，仅给 NAS 用）
+booklore_AI_Service/
