@@ -1,3 +1,5 @@
 /*
 !/booklore_AI_Service/
 !/.gitignore
+__pycache__/
+*.pyc
