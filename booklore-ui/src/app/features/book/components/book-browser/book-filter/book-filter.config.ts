@@ -16,7 +16,7 @@ export interface Filter<T extends FilterValue = FilterValue> {
 }
 
 export type FilterType =
-  | 'author' | 'category' | 'series' | 'bookType' | 'readStatus'
+  | 'author'| 'printed'| 'category' | 'series' | 'bookType' | 'readStatus'
   | 'personalRating' | 'publisher' | 'matchScore' | 'library' | 'shelf'
   | 'shelfStatus' | 'tag' | 'publishedDate' | 'fileSize' | 'amazonRating'
   | 'goodreadsRating' | 'hardcoverRating' | 'language' | 'pageCount' | 'mood'
@@ -137,6 +137,7 @@ export const NUMERIC_ID_FILTER_TYPES = new Set<FilterType>([
 ]);
 
 export const FILTER_LABELS: Readonly<Record<FilterType, string>> = {
+  printed: 'Print Status',
   author: 'Author',
   category: 'Genre',
   series: 'Series',
@@ -200,6 +201,13 @@ const findExactAgeRating = (ageRating: number | null | undefined): FilterValue[]
 };
 
 export const FILTER_EXTRACTORS: Readonly<Record<Exclude<FilterType, 'library'>, (book: Book) => FilterValue[]>> = {
+	printed: (book) => {
+	  const isPrinted = !!book.printed;
+	  return [{
+		id: isPrinted ? 'printed' : 'unprinted',
+		name: isPrinted ? '已打印' : '未打印'
+	  }];
+	},
   author: (book) => extractStringsAsFilters(book.metadata?.authors),
   category: (book) => extractStringsAsFilters(book.metadata?.categories),
   series: (book) => extractSingleString(book.metadata?.seriesName?.trim()),
@@ -271,6 +279,7 @@ export const FILTER_EXTRACTORS: Readonly<Record<Exclude<FilterType, 'library'>, 
 
 // Translation key for each FilterType — used by UI components to translate filter labels
 export const FILTER_LABEL_KEYS: Readonly<Record<FilterType, string>> = {
+  printed: 'book.filter.labels.printed',
   author: 'book.filter.labels.author',
   category: 'book.filter.labels.category',
   series: 'book.filter.labels.series',
@@ -335,6 +344,8 @@ export const COMIC_ROLE_LABEL_KEYS: Readonly<Record<string, string>> = {
 };
 
 export const FILTER_CONFIGS: Readonly<Record<Exclude<FilterType, 'library'>, Omit<FilterConfig, 'extractor'>>> = {
+	  // 👇 放第一位
+  printed: {label: 'Print Status',sortMode: 'count'},
   author: {label: 'Author', sortMode: 'count'},
   category: {label: 'Genre', sortMode: 'count'},
   series: {label: 'Series', sortMode: 'count'},

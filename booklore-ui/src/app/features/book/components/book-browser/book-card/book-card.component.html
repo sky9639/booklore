@@ -3,7 +3,7 @@
      (click)="onCardClick($event)">
 
   <div class="cover-container" [ngClass]="{ 'center-info-btn': _isSeriesViewActive || !hasDigitalFile(), 'loaded': isImageLoaded, 'audiobook-cover': _isAudiobook, 'square-library-cover': useSquareCovers }">
-    <img
+    <img 
       [src]="coverImageUrl"
       class="book-cover"
       [class.loaded]="isImageLoaded"
@@ -12,7 +12,6 @@
       loading="lazy"
       decoding="async"
       (load)="onImageLoad()"/>
-
     <div class="top-left-overlay-stack">
       @if (showBookTypePill && getDisplayFormat(); as displayFormat) {
         <div class="book-type-pill-overlay" [ngClass]="'book-type-' + displayFormat.toLowerCase()">

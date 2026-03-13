@@ -51,6 +51,7 @@ export interface Book extends FileInfo {
   metadataMatchScore?: number | null;
   personalRating?: number | null;
   readStatus?: ReadStatus;
+  printed?: boolean;
   dateFinished?: string;
   libraryPath?: { id: number };
   alternativeFormats?: AdditionalFile[];

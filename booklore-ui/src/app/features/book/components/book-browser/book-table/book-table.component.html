@@ -84,7 +84,20 @@
                 </div>
               }
             </td>
-          } @else if (col.field === 'amazonRating' || col.field === 'goodreadsRating' || col.field === 'hardcoverRating' || col.field == 'ranobedbRating') {
+        }@else if (col.field === 'printed') {
+		  <td class="cell-status">
+			<div
+			  style="display:flex; justify-content:center; align-items:center;"
+			  [pTooltip]="book.printed ? '已打印' : '未打印'"
+			  tooltipPosition="top">
+
+			  @if (book.printed === true) {
+				<i class="pi pi-check" style="color:#22c55e;"></i>
+			  }
+
+			</div>
+		  </td>
+		} @else if (col.field === 'amazonRating' || col.field === 'goodreadsRating' || col.field === 'hardcoverRating' || col.field == 'ranobedbRating') {
             <td class="cell-rating">
               <span class="rating-wrapper">
                 <p-rating

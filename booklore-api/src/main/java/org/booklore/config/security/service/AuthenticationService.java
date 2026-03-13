@@ -53,20 +53,21 @@ public class AuthenticationService {
         this.dummyPasswordHash = passwordEncoder.encode("_dummy_placeholder_for_timing_equalization_");
     }
 
-    public BookLoreUser getAuthenticatedUser() {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null) {
-            return null;
-        }
-        Object principal = authentication.getPrincipal();
-        if (principal instanceof BookLoreUser user) {
-            if (user.getId() != null && user.getId() != -1L) {
-                defaultSettingInitializer.ensureDefaultSettings(user);
-            }
-            return user;
-        }
-        throw new IllegalStateException("Authenticated principal is not of type BookLoreUser");
-    }
+	public BookLoreUser getAuthenticatedUser() {
+		Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+
+		if (authentication == null || !authentication.isAuthenticated()) {
+			return null;
+		}
+
+		Object principal = authentication.getPrincipal();
+
+		if (principal instanceof BookLoreUser user) {
+			return user;
+		}
+
+		return null;
+	}
 
     public BookLoreUser getSystemUser() {
         return createSystemUser();

@@ -16,7 +16,7 @@ export class TableColumnPreferenceService {
   readonly preferences$ = this.preferencesSubject.asObservable();
 
   private readonly allAvailableFields = [
-    'readStatus', 'title', 'authors', 'publisher', 'seriesName', 'seriesNumber',
+    'readStatus','printed','title', 'authors', 'publisher', 'seriesName', 'seriesNumber',
     'categories', 'publishedDate', 'lastReadTime', 'addedOn', 'fileName', 'fileSizeKb',
     'language', 'isbn', 'pageCount', 'amazonRating', 'amazonReviewCount',
     'goodreadsRating', 'goodreadsReviewCount', 'hardcoverRating', 'hardcoverReviewCount',

@@ -61,6 +61,8 @@ export function doesBookMatchFilter(
   }
 
   switch (filterType) {
+	case 'printed':
+	  return filterValues.includes(book.printed ? 'printed' : 'unprinted');
     case 'author':
       return mode === 'or'
         ? filterValues.some(val => book.metadata?.authors?.includes(val as string))

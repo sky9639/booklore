@@ -1,5 +1,11 @@
 fastapi
 uvicorn
-PyMuPDF
+pydantic
 Pillow
 reportlab
+PyMuPDF
+python-multipart
+requests
+python-dotenv
+websocket-client
+numpy

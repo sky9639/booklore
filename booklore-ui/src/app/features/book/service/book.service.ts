@@ -351,6 +351,9 @@ export class BookService {
     return this.bookPatchService.updateBookReadStatus(bookIds, status);
   }
 
+  updatePrintedStatus(bookId: number, printed: boolean): Observable<void> {
+    return this.bookPatchService.updatePrintedStatus(bookId, printed);
+  }
   /*------------------ Personal Rating ------------------*/
 
   resetPersonalRating(bookIds: number | number[]): Observable<PersonalRatingUpdateResponse[]> {

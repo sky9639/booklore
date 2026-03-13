@@ -1,104 +1,380 @@
-<div class="print-container">
-
-  <div class="print-header">
-    <h2>Print Workspace</h2>
-    <button class="back-btn" (click)="goBack()">返回</button>
-  </div>
-
-  <div class="print-controls">
-
-    <div class="form-row">
-      <label>Paper Thickness (mm)</label>
-      <input type="number"
-             step="0.01"
-             [(ngModel)]="state.paperThickness"
-             (ngModelChange)="recalculateSpine()">
+<div class="wrapper" *ngIf="workspaceViewModel as vm">
+  <!-- ===================== HEADER ===================== -->
+  <div class="workspace-header">
+    <div class="workspace-title-block">
+      <div class="workspace-title-main">PRINT WORKSPACE</div>
+      <div class="workspace-title-sub">拼版工作台</div>
     </div>
-
-    <div class="form-row">
-      <label>Page Count</label>
-      <input type="number"
-             [(ngModel)]="state.pageCount"
-             (ngModelChange)="recalculateSpine()">
-    </div>
-
-    <div class="form-row">
-      <label>Spine Mode</label>
-      <select [(ngModel)]="spineMode">
-        <option value="auto">Auto</option>
-        <option value="manual">Manual</option>
-      </select>
-    </div>
-
-    <div class="form-row">
-      <label>Back Mode</label>
-      <select [(ngModel)]="backMode">
-        <option value="auto">Auto</option>
-        <option value="manual">Manual</option>
-      </select>
-    </div>
-
-    <div class="button-row">
-      <button class="btn-primary"
-              (click)="generatePreview()"
-              [disabled]="loading">
-        生成预览
+    <div class="workspace-actions">
+      <button class="blue-action-btn" (click)="goBookDetail()">
+        返回图书详情
       </button>
-
-      <button class="btn-success"
-              (click)="generatePdf()"
-              [disabled]="loading">
-        生成 PDF
+      <button class="blue-action-btn secondary" (click)="goLibrary()">
+        返回图书墙
       </button>
     </div>
-
   </div>
 
-  <div class="status" *ngIf="loading">
-    Processing...
+  <!-- ===================== STEP1 成书参数 ===================== -->
+  <div class="card print-params">
+    <div class="param-header">
+      <i class="pi pi-cog"></i>
+      <span>成书参数</span>
+    </div>
+    <div class="param-group">
+      <label>书名</label>
+      <div class="param-book">{{ vm.bookName }}</div>
+    </div>
+    <div class="param-group">
+      <label>尺寸</label>
+      <div class="trim-selector">
+        <button
+          class="trim-btn"
+          [class.active]="vm.trimSize === 'A4'"
+          (click)="setTrim('A4')"
+        >
+          A4
+        </button>
+        <button
+          class="trim-btn"
+          [class.active]="vm.trimSize === 'A5'"
+          (click)="setTrim('A5')"
+        >
+          A5
+        </button>
+        <button
+          class="trim-btn"
+          [class.active]="vm.trimSize === 'B5'"
+          (click)="setTrim('B5')"
+        >
+          B5
+        </button>
+      </div>
+    </div>
+    <div class="param-grid">
+      <div class="param-item">
+        <label>页数</label>
+        <div class="input-unit">
+          <input
+            type="number"
+            [ngModel]="workspace?.page_count"
+            (ngModelChange)="workspace && (workspace.page_count = +$event)"
+            (change)="recalculateSpine()"
+          />
+          <span>页</span>
+        </div>
+      </div>
+      <div class="param-item">
+        <label>纸厚</label>
+        <div class="input-unit">
+          <input
+            type="number"
+            step="0.01"
+            [ngModel]="workspace?.paper_thickness"
+            (ngModelChange)="workspace && (workspace.paper_thickness = +$event)"
+            (change)="recalculateSpine()"
+          />
+          <span>mm</span>
+        </div>
+      </div>
+    </div>
+    <div class="param-item">
+      <label>书脊宽度</label>
+      <div class="spine-edit">
+        <input
+          class="param-input"
+          type="number"
+          step="0.01"
+          [ngModel]="workspace?.spine_width_mm"
+          (ngModelChange)="workspace && (workspace.spine_width_mm = +$event)"
+        />
+        <span>mm</span>
+      </div>
+    </div>
+    <button class="primary-btn" (click)="recalculateSpine()">
+      自动计算书脊
+    </button>
   </div>
 
-  <div class="preview-section" *ngIf="state.previewUrl">
+  <!-- ===================== STEP2 素材准备 ===================== -->
+  <div class="card step2">
+    <div class="section-header" style="margin-bottom: 12px">
+      <div class="section-title" style="margin-bottom: 0">🧩 素材准备</div>
+      <button
+        class="blue-action-btn ai-generate-btn"
+        [class.loading]="aiGenerating"
+        [disabled]="aiGenerating || !canAiGenerate"
+        (click)="onAiGenerate()"
+        [title]="
+          canAiGenerate ? 'AI自动生成书脊和封底图片' : '请先上传封面素材'
+        "
+      >
+        <span class="btn-spinner" *ngIf="aiGenerating"></span>
+        <span *ngIf="!aiGenerating">✨</span>
+        {{ aiGenerating ? aiProgressText : "AI 生成书脊 & 封底" }}
+      </button>
+    </div>
 
-    <h3>Preview</h3>
+    <div
+      class="ai-status-bar ai-status-center"
+      *ngIf="aiLastResult === 'success'"
+    >
+      <i class="pi pi-check-circle"></i> 书脊 & 封底已生成成功
+    </div>
+    <div class="ai-status-bar ai-status-error" *ngIf="aiLastResult === 'error'">
+      <i class="pi pi-exclamation-triangle"></i> 生成失败：{{ aiErrorMsg }}
+    </div>
+    <div class="section-content material-grid">
+      <!--
+        [V1.8 问题1] 监听 previewRequest 事件，调用 openLightbox
+        替换原来的 openPreview(window.open) 逻辑
+      -->
+      <app-material-slot
+        title="封面"
+        type="cover"
+        [bookId]="bookId"
+        [selected]="vm.cover.selected"
+        [url]="vm.cover.url"
+        [history]="vm.cover.history"
+        [spineWidth]="workspace?.spine_width_mm || 0"
+        (previewRequest)="openLightbox($event)"
+        (deleted)="onMaterialDeleted($event)"
+        (uploaded)="onMaterialUploaded()"
+      ></app-material-slot>
 
-    <div class="preview-thumb"
-         (click)="openLightbox()">
+      <app-material-slot
+        title="书脊"
+        type="spine"
+        [bookId]="bookId"
+        [selected]="vm.spine.selected"
+        [url]="vm.spine.url"
+        [history]="vm.spine.history"
+        [spineWidth]="workspace?.spine_width_mm || 0"
+        (previewRequest)="openLightbox($event)"
+        (deleted)="onMaterialDeleted($event)"
+        (uploaded)="onMaterialUploaded()"
+      ></app-material-slot>
 
-      <img [src]="state.previewUrl" alt="preview">
+      <app-material-slot
+        title="封底"
+        type="back"
+        [bookId]="bookId"
+        [selected]="vm.back.selected"
+        [url]="vm.back.url"
+        [history]="vm.back.history"
+        [spineWidth]="workspace?.spine_width_mm || 0"
+        (previewRequest)="openLightbox($event)"
+        (deleted)="onMaterialDeleted($event)"
+        (uploaded)="onMaterialUploaded()"
+      ></app-material-slot>
+    </div>
+  </div>
 
-      <div class="overlay">
-        👁
+  <!-- ===================== STEP3 拼版说明 ===================== -->
+  <div class="card manual">
+    <div class="section-title">📋 拼版说明</div>
+    <div class="manual-content">
+      <div class="manual-steps">
+        <div class="manual-step">
+          <div class="step-badge">01</div>
+          <div class="step-body">
+            <div class="step-title">上传素材</div>
+            <div class="step-desc">
+              在右侧「素材准备」区分别上传封面、书脊、封底图片。建议使用 JPG /
+              PNG 格式，图片宽度 ≥ 3000px 以确保印刷清晰度。
+            </div>
+          </div>
+        </div>
+
+        <div class="manual-step">
+          <div class="step-badge">02</div>
+          <div class="step-body">
+            <div class="step-title">设置成书参数</div>
+            <div class="step-desc">
+              选择成书尺寸（A4 / A5 /
+              B5），填写书籍页数与纸张厚度，系统将自动计算书脊宽度。
+            </div>
+            <div class="step-formula">
+              <span class="formula-label">书脊公式</span>
+              <span class="formula-text">书脊宽度 = 页数 × 纸张厚度</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="manual-step">
+          <div class="step-badge">03</div>
+          <div class="step-body">
+            <div class="step-title">检查拼版预览</div>
+            <div class="step-desc">
+              右下方预览区将根据尺寸自动生成拼版效果。
+            </div>
+            <div class="step-modes">
+              <div class="mode-tag">
+                <span class="mode-name">A4 模式</span>
+                <span class="mode-val">封面 · 书脊 · 封底（3页独立）</span>
+              </div>
+              <div class="mode-tag">
+                <span class="mode-name">A5 / B5</span>
+                <span class="mode-val">封面＋书脊拼合 · 封底（2页）</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="manual-step">
+          <div class="step-badge">04</div>
+          <div class="step-body">
+            <div class="step-title">生成印刷文件</div>
+            <div class="step-desc">
+              确认预览无误后，点击右侧「生成印刷PDF」按钮，系统将输出符合印刷规格的
+              PDF 文件。
+            </div>
+          </div>
+        </div>
       </div>
 
+      <div class="spec-table">
+        <div class="spec-title">📐 输出规格</div>
+        <div class="spec-grid">
+          <div class="spec-item">
+            <div class="spec-key">分辨率</div>
+            <div class="spec-val">400 DPI</div>
+          </div>
+          <div class="spec-item">
+            <div class="spec-key">色彩模式</div>
+            <div class="spec-val">RGB</div>
+          </div>
+          <div class="spec-item">
+            <div class="spec-key">输出比例</div>
+            <div class="spec-val">100%</div>
+          </div>
+          <div class="spec-item">
+            <div class="spec-key">文件格式</div>
+            <div class="spec-val">PDF</div>
+          </div>
+          <div class="spec-item">
+            <div class="spec-key">A4 尺寸</div>
+            <div class="spec-val">210 × 297 mm</div>
+          </div>
+          <div class="spec-item">
+            <div class="spec-key">A5 尺寸</div>
+            <div class="spec-val">148 × 210 mm</div>
+          </div>
+          <div class="spec-item">
+            <div class="spec-key">B5 尺寸</div>
+            <div class="spec-val">176 × 250 mm</div>
+          </div>
+          <div class="spec-item">
+            <div class="spec-key">默认纸厚</div>
+            <div class="spec-val">0.06 mm/页</div>
+          </div>
+        </div>
+      </div>
     </div>
-
-    <div class="spine-info" *ngIf="previewData">
-      Page Count: {{previewData.page_count}}
-      <br>
-      Spine Width: {{previewData.spine_width_mm}} mm
-    </div>
-
   </div>
 
-  <div class="download-section"
-       *ngIf="state.pdfPath">
+  <!-- ===================== STEP4 拼版预览 ===================== -->
+  <div class="card step3">
+    <div class="section-header">
+      <div class="section-title">🖨 拼版预览</div>
+      <div class="generate-area">
+        <div class="pdf-error" *ngIf="pdfError">
+          <i class="pi pi-exclamation-triangle"></i>
+          {{ pdfError }}
+        </div>
+        <button
+          class="blue-action-btn generate-btn"
+          [class.loading]="pdfGenerating"
+          [disabled]="pdfGenerating"
+          (click)="generatePdf()"
+        >
+          <span class="btn-spinner" *ngIf="pdfGenerating"></span>
+          <i class="pi pi-file-pdf" *ngIf="!pdfGenerating"></i>
+          {{ pdfGenerating ? "生成中..." : "生成印刷PDF" }}
+        </button>
+      </div>
+    </div>
 
-    <h3>PDF Ready</h3>
+    <div class="preview-pages">
+      <div class="preview-stage">
+        <div
+          class="preview-page-wrapper"
+          [class.spine-page]="workspace?.trim_size === 'A4' && i === 1"
+          *ngFor="
+            let page of previewPages;
+            let i = index;
+            trackBy: trackPreview
+          "
+        >
+          <!-- 顶部标尺：书脊页只显示数值，其余页显示完整标尺 -->
+          <ng-container
+            *ngIf="workspace?.trim_size === 'A4' && i === 1; else fullRuler"
+          >
+            <div class="ruler-h ruler-h-spine-only">
+              <span class="ruler-val-h">{{ getPreviewPageWidth(i) }} mm</span>
+            </div>
+          </ng-container>
+          <ng-template #fullRuler>
+            <div class="ruler-h">
+              <div class="ruler-h-inner">
+                <span class="ruler-val-h">{{ getPreviewPageWidth(i) }} mm</span>
+              </div>
+            </div>
+          </ng-template>
 
-    <button class="btn-download"
-            (click)="downloadPdf()">
-      下载 PDF
-    </button>
+          <div class="preview-image-row">
+            <!-- [问题2+3] 左侧垂直标尺，纯 CSS 实现 -->
+            <div class="ruler-v">
+              <div class="ruler-v-inner">
+                <span class="ruler-val-v">{{ getPageHeight() }} mm</span>
+              </div>
+            </div>
 
+            <!-- 预览图本体 -->
+            <div
+              class="preview-box large"
+              [class.spine-img]="workspace?.trim_size === 'A4' && i === 1"
+              [class.preview-empty]="!page"
+              [style.aspect-ratio]="getPreviewPageRatio(i)"
+            >
+              <img *ngIf="page" [src]="page" draggable="false" loading="lazy" />
+              <div *ngIf="!page" class="preview-no-material">
+                <i class="pi pi-image"></i>
+                <span>暂无素材</span>
+              </div>
+            </div>
+          </div>
+
+          <!--
+            [问题4] 页码：语义化名称 + 第N页编号
+            A4：封面(第1页) / 书脊(第2页) / 封底(第3页)
+            A5/B5：封面＋书脊(第1页) / 封底(第2页)
+          -->
+          <div class="preview-page-label">
+            <ng-container *ngIf="workspace?.trim_size === 'A4'">
+              <span *ngIf="i === 0">封面（第 1 页）</span>
+              <span *ngIf="i === 1">书脊（第 2 页）</span>
+              <span *ngIf="i === 2">封底（第 3 页）</span>
+            </ng-container>
+            <ng-container *ngIf="workspace?.trim_size !== 'A4'">
+              <span *ngIf="i === 0">封面 ＋ 书脊（第 1 页）</span>
+              <span *ngIf="i === 1">封底（第 2 页）</span>
+            </ng-container>
+          </div>
+        </div>
+      </div>
+
+      <div class="output-spec">输出规格：400 DPI · RGB · 100%比例</div>
+    </div>
   </div>
-
 </div>
 
-<div class="image-modal"
-     *ngIf="showLightbox"
-     (click)="closeLightbox()">
-
-  <img [src]="state.previewUrl">
-
+<!-- ===================== [V1.8 问题1] Lightbox 遮罩层 ===================== -->
+<div class="lightbox-overlay" *ngIf="lightboxUrl" (click)="closeLightbox()">
+  <div class="lightbox-container" (click)="$event.stopPropagation()">
+    <button class="lightbox-close" (click)="closeLightbox()">
+      <i class="pi pi-times"></i>
+    </button>
+    <img [src]="lightboxUrl" draggable="false" />
+  </div>
 </div>

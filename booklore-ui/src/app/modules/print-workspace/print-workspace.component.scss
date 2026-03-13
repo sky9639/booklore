@@ -1,211 +1,917 @@
+/*
+============================================================
+Booklore Print Workspace
+版本：V1.9
+
+修复内容（相较 V1.8）：
+
+1 [问题3] 左侧垂直标尺离图片太近
+  - ruler-v 宽度从 20px 加大到 44px，数值有足够空间。
+  - ruler-val-v 加 padding，确保 mm 单位不被裁切。
+
+2 [问题4] 顶部标题重新设计
+  - 英文主标题字号加大，加入渐变色、字间距、装饰竖线。
+  - 中文副标题加入胶囊背景标签样式。
+  - 整体更大气，层次更清晰。
+
+3 [问题5] 返回图书墙按钮颜色修复
+  - 旧版 secondary 颜色过深（#1e4a9e），视觉上几乎是黑色。
+  - 新版改为与主按钮同色系的亮蓝，仅用 outline 风格区分。
+
+4 [问题6] A4 书脊标尺超长优化
+  - 书脊页（A4 第二页）预览图宽度极窄，标尺会严重超出。
+  - 对 .preview-page-wrapper 增加 max-width 限制，
+    同时 .ruler-h 加 overflow:hidden + min-width:0，
+    数值超出时自动截断不溢出。
+  - 书脊 wrapper 额外加 .spine-page class，
+    ruler-val-h 改为绝对定位居中，始终在框内显示。
+
+============================================================
+*/
+
 :host {
-  display:block;
-  min-height:100vh;
-  background:#f4f5f7 !important;
-  padding:20px 0 20px 0;
+  display: block;
+  background: #0b1220;
+  min-height: 100vh;
+  padding: 20px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #e6edf3;
 }
 
-.wrapper{
-  max-width:1280px;
-  margin:0 auto;
-  display:grid;
-  grid-template-columns:360px 1fr;
-  grid-template-rows:auto auto;
-  gap:18px;
+/* =========================================================
+   主布局 Grid
+========================================================= */
+.wrapper {
+  max-width: 1500px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  grid-template-rows: auto auto 1fr;
+  gap: 20px;
+  min-height: calc(100vh - 80px);
+  width: 100%;
 }
 
-.card{
-  background:#fff;
-  border-radius:12px;
-  padding:16px;
-  box-shadow:0 3px 10px rgba(0,0,0,0.05);
-  display:flex;
-  flex-direction:column;
-  transition:all .2s ease;
+.workspace-header {
+  grid-column: 1 / span 2;
+}
+.print-params {
+  grid-column: 1;
+}
+.step2 {
+  grid-column: 2;
+}
+.manual {
+  grid-column: 1;
+}
+.step3 {
+  grid-column: 2;
 }
 
-.card-step2{
-  box-shadow:0 6px 20px rgba(0,0,0,0.06);
+/* =========================================================
+   [问题4] Header — 重新设计
+========================================================= */
+.workspace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  background: linear-gradient(135deg, #0f1e35 0%, #111a2b 100%);
+  border: 1px solid #1f2a3d;
+  border-radius: 14px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  position: relative;
+  overflow: hidden;
+
+  /* 装饰性背景光晕 */
+  &::before {
+    content: "";
+    position: absolute;
+    top: -40px;
+    left: -40px;
+    width: 200px;
+    height: 200px;
+    background: radial-gradient(
+      circle,
+      rgba(47, 111, 235, 0.12) 0%,
+      transparent 70%
+    );
+    pointer-events: none;
+  }
 }
 
-.card-step3{
-  box-shadow:0 2px 6px rgba(0,0,0,0.04);
-  margin-bottom:0;
+.workspace-title-block {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
-.section-title{
-  font-weight:700;
-  font-size:16px;
-  margin-bottom:12px;
-  color:#111;
-  display:flex;
-  align-items:center;
-  gap:6px;
+/* 左侧装饰竖线 */
+.workspace-title-block::before {
+  content: "";
+  display: block;
+  width: 4px;
+  height: 36px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #4f8fff, #1d4ed8);
+  flex-shrink: 0;
 }
 
-.section-title img,
-.section-title svg{
-  transform:translateY(1px);
+/* [问题4] 英文主标题：更大更强 */
+.workspace-title-main {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 3px;
+  background: linear-gradient(135deg, #e8f0ff 30%, #7ab4ff 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  line-height: 1.1;
 }
 
-.desc-block{
-  font-size:13px;
-  color:#444;
-  background:#f3f4f6;
-  padding:8px 12px;
-  border-radius:8px;
-  margin-bottom:14px;
-  line-height:1.5;
+/* [问题4] 中文副标题：胶囊标签风格 */
+.workspace-title-sub {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  color: #4f8fff;
+  background: rgba(47, 111, 235, 0.12);
+  border: 1px solid rgba(79, 143, 255, 0.25);
+  border-radius: 20px;
+  padding: 2px 10px;
+  letter-spacing: 1.5px;
+  margin-top: 4px;
 }
 
-.field{
-  margin-bottom:12px;
+.workspace-actions {
+  display: flex;
+  gap: 12px;
 }
 
-.field label{
-  display:block;
-  font-size:13px;
-  margin-bottom:4px;
-  color:#333;
+/* =========================================================
+   Card 基础
+========================================================= */
+.card {
+  background: #111a2b;
+  border-radius: 14px;
+  padding: 18px;
+  border: 1px solid #1f2a3d;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.section-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.section-content {
+  flex: 1;
+}
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
 }
 
-input,select{
-  width:100%;
-  padding:6px;
-  border-radius:6px;
-  border:1px solid #e5e7eb;
-  background:#fff;
-  font-size:14px;
-  color:#111;
+/* =========================================================
+   STEP1 成书参数
+========================================================= */
+.print-params {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.param-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.param-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  label {
+    font-size: 12px;
+    color: #8ea3bf;
+  }
+}
+.param-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  label {
+    font-size: 12px;
+    color: #8ea3bf;
+  }
+}
+.param-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.param-book {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #2c3e55;
+  background: #0c1a2b;
+  font-size: 13px;
+}
+.input-unit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  input {
+    flex: 1;
+    width: 100%;
+  }
+  span {
+    font-size: 12px;
+    color: #8ea3bf;
+    white-space: nowrap;
+  }
+}
+.spine-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  input {
+    flex: 1;
+  }
+  span {
+    font-size: 12px;
+    color: #8ea3bf;
+  }
+}
+.input-unit input,
+.param-input {
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid #2c3e55;
+  background: #0c1a2b;
+  color: white;
+  text-align: center;
+  padding: 0 8px;
+}
+.trim-selector {
+  display: flex;
+  gap: 8px;
+}
+.trim-btn {
+  flex: 1;
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid #2c3e55;
+  background: #0c1a2b;
+  color: #8ea3bf;
+  cursor: pointer;
+  font-size: 13px;
+  transition: 0.15s;
+  &.active {
+    background: #2f6feb;
+    border-color: #2f6feb;
+    color: white;
+  }
 }
 
-.material-grid{
-  display:grid;
-  grid-template-columns:1fr 1fr 1fr;
-  gap:16px;
-  margin-bottom:20px;
+/* =========================================================
+   STEP2 素材区
+========================================================= */
+.material-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  align-items: stretch;
 }
 
-.material-card{
-  border:1px solid #e5e7eb;
-  border-radius:10px;
-  padding:12px;
-  display:flex;
-  flex-direction:column;
-  justify-content:space-between;
+/* =========================================================
+   STEP3 拼版说明
+========================================================= */
+.manual {
+  display: flex;
+  flex-direction: column;
+}
+.manual-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
+}
+.manual-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+}
+.manual-step {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.step-badge {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #2f6feb, #1d4ed8);
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.step-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.step-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #d0e0f5;
+}
+.step-desc {
+  font-size: 12px;
+  color: #7a94b0;
+  line-height: 1.6;
+}
+.step-formula {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #0c1624;
+  border-left: 3px solid #4f7cff;
+  padding: 5px 10px;
+  border-radius: 4px;
+  margin-top: 2px;
+}
+.formula-label {
+  font-size: 10px;
+  color: #4f7cff;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.formula-text {
+  font-size: 12px;
+  color: #c9d8ef;
+  font-family: monospace;
+}
+.step-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+}
+.mode-tag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.mode-name {
+  background: #1a2f4a;
+  color: #6da3e8;
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.mode-val {
+  color: #7a94b0;
+}
+.spec-table {
+  background: #0c1624;
+  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid #1a2f4a;
+}
+.spec-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #8ea3bf;
+  margin-bottom: 10px;
+}
+.spec-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 16px;
+}
+.spec-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  border-bottom: 1px solid #1a2f4a;
+  padding-bottom: 4px;
+}
+.spec-key {
+  color: #6b7f9a;
+}
+.spec-val {
+  color: #c9d8ef;
+  font-weight: 600;
+  font-family: monospace;
 }
 
-.preview{
-  height:170px;
-  background:#f8f8f8;
-  border:1px solid #ddd;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  color:#666;
+/* =========================================================
+   STEP4 拼版预览
+========================================================= */
+.step3 {
+  display: flex;
+  flex-direction: column;
 }
 
-.preview img{
-  max-width:100%;
-  max-height:100%;
+.preview-pages {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #1a1f2b;
+  border-radius: 10px;
+  padding: 24px 20px 16px;
+  overflow: hidden;
+  min-height: 400px;
 }
 
-.history{
-  display:flex;
-  justify-content:center;
-  gap:8px;
-  margin-top:8px;
+.preview-stage {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 40px;
+  width: 100%;
+  flex: 1;
 }
 
-.thumb{
-  width:42px;
-  height:42px;
-  background:#d1d5db;
-  border-radius:6px;
-  border:2px solid #cbd5e1;
+/* 每页外层包裹 */
+.preview-page-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  flex-shrink: 0;
+  min-width: 0; /* [问题6] 防止溢出 */
 }
 
-.thumb.active{
-  border:2px solid #6366f1;
-  background:#e0e7ff;
+/* =========================================================
+   [问题6] 书脊页（A4 第2页）wrapper 限制最小宽度
+   预览图可能只有十几像素宽，用 min-width 撑开给标尺用
+========================================================= */
+.preview-page-wrapper.spine-page {
+  min-width: 80px; /* 保证标尺数值有空间显示 */
 }
 
-.spine-box{
-  width:20px;
-  height:170px;
-  background:#d1d5db;
-  margin:auto;
+/* 书脊页顶部：只显示数值，无箭头横线 */
+.ruler-h.ruler-h-spine-only {
+  margin-left: 44px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  .ruler-val-h {
+    position: static;
+    transform: none;
+    left: auto;
+  }
 }
 
-.spine-width{
-  text-align:center;
-  font-weight:700;
-  margin-top:6px;
+/* =========================================================
+   水平标尺（顶部）
+   margin-left 与 ruler-v 宽度相同，使标尺箭头与图片左边线对齐
+========================================================= */
+.ruler-h {
+  margin-left: 44px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+
+  &::before,
+  &::after {
+    content: "";
+    width: 0;
+    height: 0;
+    border-top: 5px solid transparent;
+    border-bottom: 5px solid transparent;
+    flex-shrink: 0;
+  }
+  &::before {
+    border-right: 7px solid #3d5c7a;
+  }
+  &::after {
+    border-left: 7px solid #3d5c7a;
+  }
 }
 
-.card-footer{
-  margin-top:auto;
-  text-align:center;
-  padding-top:14px;
+.ruler-h-inner {
+  flex: 1;
+  min-width: 0; /* [问题6] 允许收缩到0 */
+  height: 1px;
+  border-top: 1px dashed #2e4a66;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
 }
 
-.btn{
-  padding:6px 14px;
-  border-radius:6px;
-  border:1px solid #d1d5db;
-  background:#f3f4f6;
-  cursor:pointer;
-  font-size:14px;
+.ruler-val-h {
+  font-size: 10px;
+  color: #6a8aaa;
+  background: #1a1f2b;
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  font-family: monospace;
+  position: absolute;
+  /* [问题6] 数值始终居中，不因容器窄而溢出 */
+  left: 50%;
+  transform: translateX(-50%);
 }
 
-.btn-primary{
-  padding:8px 24px;
-  border:none;
-  border-radius:8px;
-  background:linear-gradient(180deg,#4f7cff,#3b66f6);
-  color:#fff;
-  font-weight:600;
-  box-shadow:0 2px 0 #2f4fd3,
-             0 6px 14px rgba(59,102,246,.3);
+/* =========================================================
+   图片行：左侧垂直标尺 + 预览图
+========================================================= */
+.preview-image-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
 }
 
-.btn-primary:disabled{
-  background:#c7c7c7;
-  box-shadow:none;
-  cursor:not-allowed;
+/* =========================================================
+   [问题3] 垂直标尺（左侧）— 宽度加大，数值不被裁切
+========================================================= */
+.ruler-v {
+  width: 44px; /* 20px → 44px，数值有足够空间 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  flex-shrink: 0;
+
+  &::before,
+  &::after {
+    content: "";
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    position: absolute;
+  }
+  &::before {
+    border-bottom: 7px solid #3d5c7a;
+    top: 0;
+  }
+  &::after {
+    border-top: 7px solid #3d5c7a;
+    bottom: 0;
+  }
 }
 
-.preview-pages{
-  display:flex;
-  justify-content:center;
-  gap:24px;
-  margin-bottom:18px;
+.ruler-v-inner {
+  width: 1px;
+  height: 100%;
+  border-left: 1px dashed #2e4a66;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
 }
 
-.page{
-  width:150px;
-  height:210px;
-  border:1px solid #000;
-  position:relative;
-  background:#fafafa;
+.ruler-val-v {
+  font-size: 10px;
+  color: #6a8aaa;
+  background: #1a1f2b;
+  padding: 2px 5px; /* [问题3] 增加 padding，mm 不被截断 */
+  border-radius: 3px;
+  white-space: nowrap;
+  font-family: monospace;
+  position: absolute;
+  writing-mode: horizontal-tb;
 }
 
-.spine-mark{
-  position:absolute;
-  left:50%;
-  width:6px;
-  top:0;
-  bottom:0;
-  background:#e5e7eb;
+/* =========================================================
+   预览图本体
+========================================================= */
+.preview-box.large {
+  background: #0f1520;
+  border: 1px solid #2a3650;
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+  height: clamp(280px, 42vh, 440px);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.page-label{
-  position:absolute;
-  bottom:4px;
-  left:6px;
-  font-size:11px;
-  color:#333;
+.preview-box.large img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  object-position: center top;
 }
 
-.center{text-align:center;}
-.small{font-size:12px;color:#444;}
+/* 书脊页：强制拉伸填充 */
+.preview-box.large.spine-img img {
+  object-fit: fill;
+}
+
+/* =========================================================
+   页码标签
+========================================================= */
+.preview-page-label {
+  font-size: 11px;
+  color: #6a8aaa;
+  background: #0f1824;
+  padding: 3px 12px;
+  border-radius: 10px;
+  border: 1px solid #1e3050;
+  white-space: nowrap;
+  letter-spacing: 0.5px;
+  text-align: center;
+  align-self: center;
+}
+
+.output-spec {
+  margin-top: 10px;
+  font-size: 11px;
+  color: #4a6080;
+  text-align: center;
+  letter-spacing: 0.5px;
+}
+
+/* =========================================================
+   Lightbox 遮罩层
+========================================================= */
+.lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  cursor: zoom-out;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.lightbox-container {
+  position: relative;
+  max-width: 90vw;
+  max-height: 90vh;
+  cursor: default;
+  animation: scaleIn 0.2s ease;
+}
+
+@keyframes scaleIn {
+  from {
+    transform: scale(0.92);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.lightbox-container img {
+  display: block;
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+.lightbox-close {
+  position: absolute;
+  top: -14px;
+  right: -14px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #1e3050;
+  border: 1px solid #2e4a66;
+  color: #8ea3bf;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  transition:
+    background 0.15s,
+    color 0.15s;
+  z-index: 1;
+
+  &:hover {
+    background: #ff4d4d;
+    color: white;
+    border-color: #ff4d4d;
+  }
+}
+
+/* =========================================================
+   按钮
+========================================================= */
+.blue-action-btn {
+  background: linear-gradient(145deg, #2f6feb, #1d4ed8);
+  color: white;
+  border: none;
+  padding: 10px 24px;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    transform 0.2s,
+    background 0.2s,
+    box-shadow 0.2s;
+  white-space: nowrap;
+
+  &:hover {
+    transform: translateY(-1px);
+    background: linear-gradient(145deg, #3a7bff, #2563eb);
+    box-shadow: 0 4px 14px rgba(47, 111, 235, 0.4);
+  }
+
+  /* secondary：同色系实心蓝，略降亮度区分主次 */
+  &.secondary {
+    background: linear-gradient(145deg, #2563c8, #1a4aaa);
+
+    &:hover {
+      background: linear-gradient(145deg, #2f6feb, #1d4ed8);
+      box-shadow: 0 4px 14px rgba(47, 111, 235, 0.4);
+    }
+  }
+}
+
+.primary-btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: none;
+  background: linear-gradient(180deg, #3a6df0, #2750c8);
+  color: white;
+  cursor: pointer;
+  font-size: 13px;
+  transition: opacity 0.15s;
+  &:hover {
+    opacity: 0.9;
+  }
+}
+
+.generate-btn {
+  align-self: flex-end;
+}
+
+/* ── 生成区域（按钮 + 错误提示） ── */
+.generate-area {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.pdf-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #ff8888;
+  background: rgba(255, 80, 80, 0.1);
+  border: 1px solid rgba(255, 80, 80, 0.25);
+  border-radius: 6px;
+  padding: 6px 12px;
+  white-space: nowrap;
+  i {
+    font-size: 13px;
+  }
+}
+
+/* loading 按钮状态 */
+.blue-action-btn.loading {
+  opacity: 0.75;
+  cursor: not-allowed;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: btnSpin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes btnSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 预览区无素材占位符 */
+.preview-empty {
+  background: linear-gradient(160deg, #111827 0%, #0d1220 100%);
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+.preview-empty-placeholder,
+.preview-no-material {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  color: rgba(255, 255, 255, 0.18);
+
+  .pi-image {
+    font-size: 32px;
+    opacity: 0.5;
+  }
+
+  span {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    opacity: 0.7;
+  }
+}
+
+/* =========================================================
+   AI 生成书脊 & 封底 — 大按钮（紫色，区别于蓝色PDF按钮）
+========================================================= */
+.ai-generate-btn {
+  background: linear-gradient(145deg, #7c3aed, #5b21b6) !important;
+  padding: 9px 20px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+
+  &:hover:not(:disabled) {
+    background: linear-gradient(145deg, #8b5cf6, #6d28d9) !important;
+    box-shadow: 0 4px 14px rgba(124, 58, 237, 0.45) !important;
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+}
+
+/* AI 状态提示条 */
+.ai-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #6ee7b7;
+  background: rgba(52, 211, 153, 0.08);
+  border: 1px solid rgba(52, 211, 153, 0.2);
+  border-radius: 6px;
+  padding: 6px 12px;
+  margin-bottom: 8px;
+
+  &.ai-status-center {
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 16px;
+  }
+
+  &.ai-status-error {
+    color: #fca5a5;
+    background: rgba(248, 113, 113, 0.08);
+    border-color: rgba(248, 113, 113, 0.2);
+  }
+}

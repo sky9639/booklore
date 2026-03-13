@@ -67,7 +67,9 @@
       "moreActions": "More actions",
       "selectAll": "Select all books",
       "deselectAll": "Deselect all books",
-      "deleteSelected": "Delete selected books"
+      "deleteSelected": "Delete selected books",
+      "markAsPrinted": "Mark as Printed",
+      "markAsUnprinted": "Mark as Unprinted"
     },
     "placeholder": {
       "selectColumns": "Select Columns",
@@ -306,6 +308,7 @@
   "columnPref": {
     "columns": {
       "readStatus": "Read",
+      "printed": "Printed",
       "title": "Title",
       "authors": "Authors",
       "publisher": "Publisher",

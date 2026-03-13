@@ -208,7 +208,31 @@ export class BookPatchService {
       })
     );
   }
+  
+	updatePrintedStatus(bookId: number, printed: boolean): Observable<void> {
+	  const body = {
+		bookId: bookId,
+		printed: printed
+	  };
 
+	  return this.http.post<void>(`${this.url}/printed`, body).pipe(
+		tap(() => {
+		  const currentState = this.bookStateService.getCurrentBookState();
+		  const updatedBooks = (currentState.books || []).map(book =>
+			book.id === bookId
+			  ? { ...book, printed: printed }
+			  : book
+		  );
+
+		  this.bookStateService.updateBookState({
+			...currentState,
+			books: updatedBooks
+		  });
+		})
+	  );
+	}  
+  
+  
   resetPersonalRating(bookIds: number | number[]): Observable<PersonalRatingUpdateResponse[]> {
     const ids = Array.isArray(bookIds) ? bookIds : [bookIds];
 

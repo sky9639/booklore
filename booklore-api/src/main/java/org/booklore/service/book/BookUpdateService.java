@@ -85,7 +85,15 @@ public class BookUpdateService {
 
         return buildRatingUpdateResponses(bookIds, rating);
     }
+    @Transactional
+    public void updatePrintedStatus(Long bookId, Boolean printed) {
 
+        BookEntity book = bookRepository.findById(bookId)
+                .orElseThrow(() -> ApiError.BOOK_NOT_FOUND.createException());
+
+        book.setPrinted(printed);
+        bookRepository.save(book);
+    }
     @Transactional
     public List<PersonalRatingUpdateResponse> resetPersonalRating(List<Long> bookIds) {
         BookLoreUser user = authenticationService.getAuthenticatedUser();

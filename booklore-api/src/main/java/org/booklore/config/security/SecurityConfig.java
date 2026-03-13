@@ -210,29 +210,31 @@ public class SecurityConfig {
         return http.build();
     }
 
-    @Bean
-    @Order(8)
-    public SecurityFilterChain jwtApiSecurityChain(HttpSecurity http) throws Exception {
-        List<String> publicEndpoints = new ArrayList<>(Arrays.asList(COMMON_PUBLIC_ENDPOINTS));
-        http
-                .securityMatcher("/api/**", "/komga/**", "/ws/**")
-                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-                .csrf(AbstractHttpConfigurer::disable)
-                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .headers(headers -> headers
-                        .referrerPolicy(referrer -> referrer.policy(
-                                ReferrerPolicyHeaderWriter.ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN))
-                        .contentTypeOptions(contentType -> {})
-                )
-                .authorizeHttpRequests(auth -> auth
-                        .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
-                        .requestMatchers(publicEndpoints.toArray(new String[0])).permitAll()
-						.requestMatchers("/api/print/**").permitAll()
-                        .anyRequest().authenticated()
-                )
-                .addFilterBefore(dualJwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
-        return http.build();
-    }
+	@Bean
+	@Order(8)
+	public SecurityFilterChain jwtApiSecurityChain(HttpSecurity http) throws Exception {
+		List<String> publicEndpoints = new ArrayList<>(Arrays.asList(COMMON_PUBLIC_ENDPOINTS));
+		http
+				.securityMatcher("/api/**", "/komga/**", "/ws/**")
+				.cors(cors -> cors.configurationSource(corsConfigurationSource()))
+				.csrf(AbstractHttpConfigurer::disable)
+				.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+				.headers(headers -> headers
+						.referrerPolicy(referrer -> referrer.policy(
+								ReferrerPolicyHeaderWriter.ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN))
+						.contentTypeOptions(contentType -> {})
+				)
+				.authorizeHttpRequests(auth -> auth
+						.dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
+						.requestMatchers(publicEndpoints.toArray(new String[0])).permitAll()
+						        // Print Workspace 图片
+						.requestMatchers("/api/v1/print/*/asset/**").permitAll()
+						.requestMatchers("/api/print/**").authenticated()
+						.anyRequest().authenticated()
+				)
+				.addFilterBefore(dualJwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+		return http.build();
+	}
 
     @Bean
     @Order(9)

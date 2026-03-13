@@ -1,7 +1,10 @@
-import fitz  # PyMuPDF
+import fitz
+
 
 def get_pdf_page_count(pdf_path: str) -> int:
-    doc = fitz.open(pdf_path)
-    count = doc.page_count
-    doc.close()
-    return count
+    """
+    获取 PDF 页数
+    """
+
+    with fitz.open(pdf_path) as doc:
+        return doc.page_count

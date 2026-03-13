@@ -707,7 +707,7 @@ export class MetadataViewerComponent implements OnInit, OnChanges, AfterViewChec
             life: 2000
           });
         },
-        error: (err) => {
+        error: (err: any) => {
           console.error('Failed to update read status:', err);
           this.messageService.add({
             severity: 'error',
@@ -719,6 +719,36 @@ export class MetadataViewerComponent implements OnInit, OnChanges, AfterViewChec
       });
     });
   }
+  
+	  togglePrinted(book: Book): void {
+	  if (!book || !book.id) {
+		return;
+	  }
+
+	  const newValue = !book.printed;
+
+	  this.bookService.updatePrintedStatus(book.id, newValue).subscribe({
+		next: () => {
+		  book.printed = newValue;
+
+		  this.messageService.add({
+			severity: 'success',
+			summary: '打印状态已更新',
+			detail: newValue ? '已标记为已打印' : '已标记为未打印',
+			life: 1500
+		  });
+		},
+		error: (err) => {
+		  console.error('Failed to update printed status:', err);
+		  this.messageService.add({
+			severity: 'error',
+			summary: '更新失败',
+			detail: '无法更新打印状态',
+			life: 3000
+		  });
+		}
+	  });
+	}
 
   resetProgress(book: Book, type: ResetProgressType): void {
     this.confirmationService.confirm({
@@ -1445,5 +1475,8 @@ export class MetadataViewerComponent implements OnInit, OnChanges, AfterViewChec
 
   goToNarrator(narrator: string): void {
     this.handleMetadataClick('narrator', narrator);
+  }
+  openPrintWorkspace(bookId: number): void {
+    this.router.navigate(['/print', bookId]);
   }
 }

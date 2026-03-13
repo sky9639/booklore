@@ -48,7 +48,10 @@
       "noBooks": "此集合没有图书！",
       "failedLibrary": "加载书库图书失败！",
       "failedShelf": "加载书架图书失败！",
-      "activeFilters": "{{ count }} 个活跃筛选条件"
+      "activeFilters": "{{ count }} 个活跃筛选条件",
+      "all": "全部",
+      "printed": "已打印",
+      "unprinted": "未打印"
     },
     "tooltip": {
       "clearFilters": "清除已应用的筛选条件",
@@ -67,7 +70,9 @@
       "moreActions": "更多操作",
       "selectAll": "选择所有图书",
       "deselectAll": "取消选择所有图书",
-      "deleteSelected": "删除选中的图书"
+      "deleteSelected": "删除选中的图书",
+      "markAsPrinted": "标记为已打印",
+      "markAsUnprinted": "取消打印标记"
     },
     "placeholder": {
       "selectColumns": "选择列",
@@ -303,6 +308,7 @@
   "columnPref": {
     "columns": {
       "readStatus": "阅读",
+      "printed": "已打印",
       "title": "标题",
       "authors": "作者",
       "publisher": "出版社",
@@ -460,6 +466,7 @@
     "showingFirst100": "显示前 100 项",
     "footerNote": "注意：每个筛选类别最多显示 100 项",
     "labels": {
+      "printed": "打印状态",
       "author": "作者",
       "category": "类型",
       "series": "系列",
@@ -487,6 +494,10 @@
       "comicTeam": "漫画团队",
       "comicLocation": "漫画地点",
       "comicCreator": "漫画创作者"
+    },
+    "printed": {
+      "true": "已打印",
+      "false": "未打印"
     },
     "readStatus": {
       "unread": "未读",
@@ -613,6 +624,8 @@
     "statusPrefix": "状态：",
     "locked": "已锁定",
     "unlocked": "已解锁",
+    "printedTrue": "已打印",
+    "printedFalse": "未打印",
     "toast": {
       "metadataLockedSummary": "元数据已锁定",
       "metadataLockedDetail": "图书元数据已成功锁定。",

@@ -189,7 +189,7 @@ export interface TableColumnPreference {
 }
 
 export type VisibleFilterType =
-  | 'author' | 'category' | 'series' | 'bookType' | 'readStatus'
+  | 'author' | 'printed'| 'category' | 'series' | 'bookType' | 'readStatus'
   | 'personalRating' | 'publisher' | 'matchScore' | 'library' | 'shelf'
   | 'shelfStatus' | 'tag' | 'publishedDate' | 'fileSize' | 'amazonRating'
   | 'goodreadsRating' | 'hardcoverRating' | 'language' | 'pageCount' | 'mood'
@@ -198,14 +198,14 @@ export type VisibleFilterType =
   | 'comicCharacter' | 'comicTeam' | 'comicLocation' | 'comicCreator';
 
 export const DEFAULT_VISIBLE_FILTERS: VisibleFilterType[] = [
-  'author', 'category', 'series', 'bookType', 'readStatus',
+  'printed','author', 'category', 'series', 'bookType', 'readStatus',
   'personalRating', 'library', 'tag', 'ageRating', 'contentRating',
   'matchScore', 'publisher', 'publishedDate', 'fileSize'
 ];
 
 // Translation key for each filter option — use book.filter.labels.<value>
 export const ALL_FILTER_OPTION_VALUES: VisibleFilterType[] = [
-  'author', 'category', 'series', 'bookType', 'readStatus',
+  'printed','author', 'category', 'series', 'bookType', 'readStatus',
   'personalRating', 'library', 'tag', 'ageRating', 'contentRating',
   'matchScore', 'publisher', 'publishedDate', 'fileSize', 'shelf',
   'shelfStatus', 'language', 'pageCount', 'mood', 'amazonRating',
@@ -214,6 +214,7 @@ export const ALL_FILTER_OPTION_VALUES: VisibleFilterType[] = [
 ];
 
 export const ALL_FILTER_OPTIONS: { label: string; value: VisibleFilterType }[] = [
+  {label: 'Print Status', value: 'printed' },
   {label: 'Author', value: 'author'},
   {label: 'Genre', value: 'category'},
   {label: 'Series', value: 'series'},

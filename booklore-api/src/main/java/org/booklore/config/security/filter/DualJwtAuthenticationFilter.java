@@ -12,22 +12,27 @@ import org.booklore.model.entity.BookLoreUserEntity;
 import org.booklore.repository.UserRepository;
 import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.service.user.UserProvisioningService;
+
 import com.nimbusds.jwt.JWTClaimsSet;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
-
+import org.springframework.security.core.Authentication;
 import java.io.IOException;
 import java.time.Instant;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -41,8 +46,9 @@ public class DualJwtAuthenticationFilter extends OncePerRequestFilter {
     private final UserRepository userRepository;
     private final AppSettingService appSettingService;
     private final UserProvisioningService userProvisioningService;
-    private static final ConcurrentMap<String, Object> userLocks = new ConcurrentHashMap<>();
     private final DynamicOidcJwtProcessor dynamicOidcJwtProcessor;
+
+    private static final ConcurrentMap<String, Object> userLocks = new ConcurrentHashMap<>();
 
     private static final List<String> WHITELISTED_PATHS = List.of(
             "/api/v1/opds/",
@@ -53,29 +59,27 @@ public class DualJwtAuthenticationFilter extends OncePerRequestFilter {
     );
 
     @Override
-    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain) throws IOException, ServletException {
-        String token = extractToken(request);
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain chain)
+            throws IOException, ServletException {
 
+        String token = extractToken(request);
         String path = request.getRequestURI();
 
         boolean isWhitelisted = WHITELISTED_PATHS.stream().anyMatch(path::startsWith);
 
-        if (isWhitelisted) {
+        if (isWhitelisted || token == null) {
             chain.doFilter(request, response);
             return;
         }
 
-        if (token == null) {
-            chain.doFilter(request, response);
-            return;
-        }
         try {
             if (jwtUtils.validateToken(token)) {
                 authenticateLocalUser(token, request);
             } else if (appSettingService.getAppSettings().isOidcEnabled()) {
                 authenticateOidcUser(token, request);
             } else {
-                log.debug("OIDC is disabled and token is invalid. Rejecting request.");
                 response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                 return;
             }
@@ -84,14 +88,25 @@ public class DualJwtAuthenticationFilter extends OncePerRequestFilter {
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             return;
         }
+
         chain.doFilter(request, response);
     }
 
     private void authenticateLocalUser(String token, HttpServletRequest request) {
         Long userId = jwtUtils.extractUserId(token);
-        BookLoreUserEntity entity = userRepository.findById(userId).orElseThrow(() -> new UsernameNotFoundException("User not found with ID: " + userId));
+
+        BookLoreUserEntity entity = userRepository.findById(userId)
+                .orElseThrow(() -> new UsernameNotFoundException("User not found with ID: " + userId));
+
         BookLoreUser user = bookLoreUserTransformer.toDTO(entity);
-        UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(user, null, null);
+
+        UsernamePasswordAuthenticationToken authentication =
+                new UsernamePasswordAuthenticationToken(
+                        user,
+                        null,
+                        buildAuthorities(user)
+                );
+
         authentication.setDetails(new UserAuthenticationDetails(request, user.getId()));
         SecurityContextHolder.getContext().setAuthentication(authentication);
     }
@@ -101,9 +116,9 @@ public class DualJwtAuthenticationFilter extends OncePerRequestFilter {
             OidcProviderDetails providerDetails = appSettingService.getAppSettings().getOidcProviderDetails();
             JWTClaimsSet claimsSet = dynamicOidcJwtProcessor.getProcessor().process(token, null);
 
-            if (claimsSet.getExpirationTime() == null || claimsSet.getExpirationTime().toInstant().isBefore(Instant.now())) {
-                log.warn("OIDC token is expired or missing exp claim");
-                throw ApiError.GENERIC_UNAUTHORIZED.createException("Token has expired or is invalid.");
+            if (claimsSet.getExpirationTime() == null ||
+                claimsSet.getExpirationTime().toInstant().isBefore(Instant.now())) {
+                throw ApiError.GENERIC_UNAUTHORIZED.createException("Token expired or invalid.");
             }
 
             OidcProviderDetails.ClaimMapping claimMapping = providerDetails.getClaimMapping();
@@ -111,23 +126,27 @@ public class DualJwtAuthenticationFilter extends OncePerRequestFilter {
             String email = claimsSet.getStringClaim(claimMapping.getEmail());
             String name = claimsSet.getStringClaim(claimMapping.getName());
 
-            OidcAutoProvisionDetails provisionDetails = appSettingService.getAppSettings().getOidcAutoProvisionDetails();
-            boolean autoProvision = provisionDetails != null && provisionDetails.isEnableAutoProvisioning();
+            OidcAutoProvisionDetails provisionDetails =
+                    appSettingService.getAppSettings().getOidcAutoProvisionDetails();
+
+            boolean autoProvision =
+                    provisionDetails != null && provisionDetails.isEnableAutoProvisioning();
 
             BookLoreUserEntity entity = userRepository.findByUsername(username)
                     .orElseGet(() -> {
                         if (!autoProvision) {
-                            log.warn("User '{}' not found and auto-provisioning is disabled.", username);
-                            throw ApiError.GENERIC_UNAUTHORIZED.createException("User not found and auto-provisioning is disabled.");
+                            throw ApiError.GENERIC_UNAUTHORIZED
+                                    .createException("User not found and auto-provision disabled.");
                         }
+
                         Object lock = userLocks.computeIfAbsent(username, k -> new Object());
                         try {
                             synchronized (lock) {
                                 return userRepository.findByUsername(username)
-                                        .orElseGet(() -> {
-                                            log.info("Provisioning new OIDC user '{}'", username);
-                                            return userProvisioningService.provisionOidcUser(username, email, name, provisionDetails);
-                                        });
+                                        .orElseGet(() ->
+                                                userProvisioningService.provisionOidcUser(
+                                                        username, email, name, provisionDetails
+                                                ));
                             }
                         } finally {
                             userLocks.remove(username);
@@ -135,18 +154,72 @@ public class DualJwtAuthenticationFilter extends OncePerRequestFilter {
                     });
 
             BookLoreUser user = bookLoreUserTransformer.toDTO(entity);
-            UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(user, null, null);
+
+            UsernamePasswordAuthenticationToken authentication =
+                    new UsernamePasswordAuthenticationToken(
+                            user,
+                            null,
+                            buildAuthorities(user)
+                    );
+
             authentication.setDetails(new UserAuthenticationDetails(request, user.getId()));
             SecurityContextHolder.getContext().setAuthentication(authentication);
 
         } catch (Exception e) {
             log.error("OIDC authentication failed", e);
-            throw ApiError.GENERIC_UNAUTHORIZED.createException("OIDC JWT validation failed: " + e.getMessage());
+            throw ApiError.GENERIC_UNAUTHORIZED
+                    .createException("OIDC JWT validation failed: " + e.getMessage());
         }
     }
 
+    /**
+     * 关键：同时支持 hasRole() 与 hasAuthority()
+     */
+	private Collection<? extends GrantedAuthority> buildAuthorities(BookLoreUser user) {
+
+		List<GrantedAuthority> authorities = new ArrayList<>();
+
+		// 基础角色
+		authorities.add(new SimpleGrantedAuthority("ROLE_USER"));
+
+		if (user.getPermissions() != null) {
+
+			BookLoreUser.UserPermissions perms = user.getPermissions();
+
+			if (perms.isAdmin()) {
+				authorities.add(new SimpleGrantedAuthority("ROLE_ADMIN"));
+			}
+
+			// 反射遍历所有 boolean 字段
+			Arrays.stream(BookLoreUser.UserPermissions.class.getDeclaredFields())
+					.filter(f -> f.getType().equals(boolean.class))
+					.forEach(field -> {
+						try {
+							field.setAccessible(true);
+							boolean value = field.getBoolean(perms);
+
+							if (value) {
+								String authorityName = field.getName()
+										.replaceFirst("^is", "")
+										.replaceFirst("^can", "")
+										.toUpperCase();
+
+								authorities.add(
+										new SimpleGrantedAuthority(authorityName)
+								);
+							}
+
+						} catch (IllegalAccessException ignored) {}
+					});
+		}
+
+		return authorities;
+	}
+
     private String extractToken(HttpServletRequest request) {
         String bearer = request.getHeader("Authorization");
-        return (bearer != null && bearer.startsWith("Bearer ")) ? bearer.substring(7) : null;
+        return (bearer != null && bearer.startsWith("Bearer "))
+                ? bearer.substring(7)
+                : null;
     }
 }

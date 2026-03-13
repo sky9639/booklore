@@ -583,6 +583,27 @@
               }
             </div>
           }
+		  
+			<div class="metadata-item">
+			  <span class="metadata-key">打印状态</span>
+
+			  <span class="metadata-value-group">
+				<app-tag
+				  size="3xs"
+				  variant="pill"
+				  [color]="book?.printed ? 'green' : 'gray'">
+				  {{ book?.printed ? '已打印' : '未打印' }}
+				</app-tag>
+
+				<p-checkbox
+				  [ngModel]="book.printed"
+				  [binary]="true"
+				  inputId="printedStatus"
+				  (onChange)="togglePrinted(book)">
+				</p-checkbox>
+			  </span>
+			</div>
+		  
         </div>
 
         @if (userService.userState$ | async; as userState) {
@@ -593,7 +614,7 @@
                   <p-button
                     icon="pi pi-chevron-left"
                     [disabled]="!canNavigatePrevious()"
-                    (onClick)="navigatePrevious()"`
+                    (onClick)="navigatePrevious()"
                     outlined
                     severity="secondary"
                     [pTooltip]="t('goToPreviousBook')"
@@ -649,6 +670,15 @@
                     tooltipPosition="top"
                     class="mobile-icon-only">
                   </p-button>
+				  <!-- 🔥 在这里插入 -->
+				  <p-button
+				    label="拼版工作台"
+					icon="pi pi-print"
+					severity="info"
+					outlined
+					class="mobile-icon-only"
+					(onClick)="openPrintWorkspace(book.id)">
+			      </p-button>
                 }
                 @if (otherItems$ | async; as otherItems) {
                   @if (otherItems.length > 0) {

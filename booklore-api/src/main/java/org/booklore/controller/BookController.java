@@ -43,7 +43,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
-
+import org.booklore.model.dto.request.PrintedStatusUpdateRequest;
 import java.util.List;
 import java.util.Set;
 
@@ -232,7 +232,15 @@ public class BookController {
     public List<BookStatusUpdateResponse> updateReadStatus(@RequestBody @Valid ReadStatusUpdateRequest request) {
         return bookService.updateReadStatus(request.getBookIds(), request.getStatus());
     }
+	@Operation(summary = "Update printed status", description = "Update printed status for a book.")
+	@ApiResponse(responseCode = "204", description = "Printed status updated successfully")
+	@PostMapping("/printed")
+	public ResponseEntity<Void> updatePrintedStatus(
+			@RequestBody @Valid PrintedStatusUpdateRequest request) {
 
+		bookUpdateService.updatePrintedStatus(request.bookId(), request.printed());
+		return ResponseEntity.noContent().build();
+	}
     @Operation(summary = "Reset reading progress", description = "Reset the reading progress for one or more books.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Progress reset successfully"),

@@ -63,61 +63,138 @@ export class PdfReaderComponent implements OnInit, OnDestroy {
   private pdfAnnotationService = inject(PdfAnnotationService);
   private readonly t = inject(TranslocoService);
 
-  ngOnInit(): void {
-    this.annotationSaveSubscription = this.annotationSaveSubject
-      .pipe(debounceTime(1500))
-      .subscribe(() => this.persistAnnotations());
+	ngOnInit(): void {
 
-    this.route.paramMap.subscribe((params) => {
-      this.isLoading = true;
-      this.bookId = +params.get('bookId')!;
-      this.altBookType = this.route.snapshot.queryParamMap.get('bookType') ?? undefined;
+	  this.annotationSaveSubscription = this.annotationSaveSubject
+		.pipe(debounceTime(1500))
+		.subscribe(() => this.persistAnnotations());
 
-      this.bookService.getBookByIdFromAPI(this.bookId, false).pipe(
-        switchMap((book) => {
-          if (this.altBookType) {
-            const altFile = book.alternativeFormats?.find(f => f.bookType === this.altBookType);
-            this.bookFileId = altFile?.id;
-          } else {
-            this.bookFileId = book.primaryFile?.id;
-          }
+	  this.route.paramMap.subscribe((params) => {
 
-          return forkJoin([
-            this.bookService.getBookSetting(this.bookId, this.bookFileId!),
-            this.userService.getMyself()
-          ]).pipe(map(([bookSetting, myself]) => ({book, bookSetting, myself})));
-        })
-      ).subscribe({
-        next: ({book, bookSetting, myself}) => {
-          const pdfMeta = book;
-          const pdfPrefs = bookSetting;
+		this.isLoading = true;
 
-          this.pageTitle.setBookPageTitle(pdfMeta);
+		const type = params.get('type');     // ⭐ 新增
+		this.bookId = +params.get('bookId')!;
+		this.altBookType =
+		  this.route.snapshot.queryParamMap.get('bookType') ?? undefined;
 
-          const globalOrIndividual = myself.userSettings.perBookSetting.pdf;
-          if (globalOrIndividual === 'Global') {
-            this.zoom = myself.userSettings.pdfReaderSetting.pageZoom || 'page-fit';
-            this.spread = myself.userSettings.pdfReaderSetting.pageSpread || 'odd';
-          } else {
-            this.zoom = pdfPrefs.pdfSettings?.zoom || myself.userSettings.pdfReaderSetting.pageZoom || 'page-fit';
-            this.spread = pdfPrefs.pdfSettings?.spread || myself.userSettings.pdfReaderSetting.pageSpread || 'odd';
-          }
-          this.canPrint = myself.permissions.canDownload || myself.permissions.admin;
-          this.page = pdfMeta.pdfProgress?.page || 1;
-          this.bookData = this.altBookType
-            ? `${API_CONFIG.BASE_URL}/api/v1/books/${this.bookId}/content?bookType=${this.altBookType}`
-            : `${API_CONFIG.BASE_URL}/api/v1/books/${this.bookId}/content`;
-          const token = this.authService.getOidcAccessToken() || this.authService.getInternalAccessToken();
-          this.authorization = token ? `Bearer ${token}` : '';
-          this.isLoading = false;
-        },
-        error: () => {
-          this.messageService.add({severity: 'error', summary: this.t.translate('common.error'), detail: this.t.translate('readerPdf.toast.failedToLoadBook')});
-          this.isLoading = false;
-        }
-      });
-    });
-  }
+		// ===============================
+		// ⭐ PRINT 模式（拼版 PDF）
+		// ===============================
+		if (type === 'print') {
+		  this.bookData =
+			`${API_CONFIG.BASE_URL}/api/print/${this.bookId}/pdf-content`;
+
+		  const token =
+			this.authService.getOidcAccessToken()
+			|| this.authService.getInternalAccessToken();
+
+		  this.authorization = token
+			? `Bearer ${token}`
+			: '';
+
+		  // 固定默认值（不污染阅读设置）
+		  this.page = 1;
+		  this.zoom = 'page-fit';
+		  this.spread = 'off';
+		  this.canPrint = true;
+
+		  this.isLoading = false;
+		  return;
+		}
+
+		// ===============================
+		// ⭐ 原 BOOK 模式（保持官方逻辑）
+		// ===============================
+
+		this.bookService.getBookByIdFromAPI(this.bookId, false).pipe(
+		  switchMap((book) => {
+
+			if (this.altBookType) {
+			  const altFile = book.alternativeFormats
+				?.find(f => f.bookType === this.altBookType);
+			  this.bookFileId = altFile?.id;
+			} else {
+			  this.bookFileId = book.primaryFile?.id;
+			}
+
+			return forkJoin([
+			  this.bookService.getBookSetting(
+				this.bookId,
+				this.bookFileId!
+			  ),
+			  this.userService.getMyself()
+			]).pipe(
+			  map(([bookSetting, myself]) =>
+				({book, bookSetting, myself}))
+			);
+		  })
+		).subscribe({
+
+		  next: ({book, bookSetting, myself}) => {
+
+			const pdfMeta = book;
+			const pdfPrefs = bookSetting;
+
+			this.pageTitle.setBookPageTitle(pdfMeta);
+
+			const globalOrIndividual =
+			  myself.userSettings.perBookSetting.pdf;
+
+			if (globalOrIndividual === 'Global') {
+			  this.zoom =
+				myself.userSettings.pdfReaderSetting.pageZoom
+				|| 'page-fit';
+
+			  this.spread =
+				myself.userSettings.pdfReaderSetting.pageSpread
+				|| 'odd';
+			} else {
+			  this.zoom =
+				pdfPrefs.pdfSettings?.zoom
+				|| myself.userSettings.pdfReaderSetting.pageZoom
+				|| 'page-fit';
+
+			  this.spread =
+				pdfPrefs.pdfSettings?.spread
+				|| myself.userSettings.pdfReaderSetting.pageSpread
+				|| 'odd';
+			}
+
+			this.canPrint =
+			  myself.permissions.canDownload
+			  || myself.permissions.admin;
+
+			this.page =
+			  pdfMeta.pdfProgress?.page || 1;
+
+			this.bookData = this.altBookType
+			  ? `${API_CONFIG.BASE_URL}/api/v1/books/${this.bookId}/content?bookType=${this.altBookType}`
+			  : `${API_CONFIG.BASE_URL}/api/v1/books/${this.bookId}/content`;
+
+			const token =
+			  this.authService.getOidcAccessToken()
+			  || this.authService.getInternalAccessToken();
+
+			this.authorization =
+			  token ? `Bearer ${token}` : '';
+
+			this.isLoading = false;
+		  },
+
+		  error: () => {
+			this.messageService.add({
+			  severity: 'error',
+			  summary: this.t.translate('common.error'),
+			  detail: this.t.translate('readerPdf.toast.failedToLoadBook')
+			});
+
+			this.isLoading = false;
+		  }
+		});
+
+	  });
+	}
 
   onPageChange(page: number): void {
     if (page !== this.page) {

@@ -1,12 +1,12 @@
-import {HttpErrorResponse, HttpEvent, HttpHandlerFn, HttpInterceptorFn, HttpRequest} from '@angular/common/http';
-import {inject} from '@angular/core';
-import {Router} from '@angular/router';
-import {catchError, filter, switchMap, take} from 'rxjs/operators';
-import {BehaviorSubject, Observable, throwError} from 'rxjs';
-import {AuthService} from '../../shared/service/auth.service';
-import {API_CONFIG} from '../config/api-config';
+import { HttpErrorResponse, HttpEvent, HttpHandlerFn, HttpInterceptorFn, HttpRequest } from '@angular/common/http';
+import { inject } from '@angular/core';
+import { Router } from '@angular/router';
+import { catchError, filter, switchMap, take } from 'rxjs/operators';
+import { BehaviorSubject, Observable, throwError } from 'rxjs';
+import { AuthService } from '../../shared/service/auth.service';
 
 export const AuthInterceptorService: HttpInterceptorFn = (req, next: HttpHandlerFn) => {
+
   const authService = inject(AuthService);
   const router = inject(Router);
 
@@ -14,9 +14,11 @@ export const AuthInterceptorService: HttpInterceptorFn = (req, next: HttpHandler
   const oidcToken = authService.getOidcAccessToken();
   const token = internalToken || oidcToken;
 
-  const isApiRequest = req.url.startsWith(`${API_CONFIG.BASE_URL}/api/`);
+ const isApiRequest = req.url.includes('/api/');
 
-  const authReq = (token && isApiRequest) ? req.clone({ setHeaders: { Authorization: `Bearer ${token}` } }) : req;
+  const authReq = (token && isApiRequest)
+    ? req.clone({ setHeaders: { Authorization: `Bearer ${token}` } })
+    : req;
 
   return next(authReq).pipe(
     catchError((error: HttpErrorResponse) => {
@@ -31,7 +33,14 @@ export const AuthInterceptorService: HttpInterceptorFn = (req, next: HttpHandler
 let isRefreshing = false;
 const refreshTokenSubject = new BehaviorSubject<string | null>(null);
 
-function handle401Error(authService: AuthService, request: HttpRequest<unknown>, next: HttpHandlerFn, router: Router, isInternal: boolean): Observable<HttpEvent<unknown>> {
+function handle401Error(
+  authService: AuthService,
+  request: HttpRequest<unknown>,
+  next: HttpHandlerFn,
+  router: Router,
+  isInternal: boolean
+): Observable<HttpEvent<unknown>> {
+
   if (!isRefreshing && isInternal) {
     isRefreshing = true;
     refreshTokenSubject.next(null);
@@ -40,10 +49,12 @@ function handle401Error(authService: AuthService, request: HttpRequest<unknown>,
       switchMap(response => {
         isRefreshing = false;
         const { accessToken, refreshToken } = response;
+
         if (accessToken && refreshToken) {
           authService.saveInternalTokens(accessToken, refreshToken);
           refreshTokenSubject.next(accessToken);
         }
+
         return next(request.clone({
           setHeaders: { Authorization: `Bearer ${accessToken}` }
         }));
@@ -68,11 +79,10 @@ function handle401Error(authService: AuthService, request: HttpRequest<unknown>,
     );
   }
 
-  forceLogout(authService, router, isInternal ? 'Session expired, please log in again.' : 'OIDC token expired, please log in again.');
-  return throwError(() => new Error('Authentication failed, please log in.'));
+  forceLogout(authService, router);
+  return throwError(() => new Error('Authentication failed'));
 }
 
-function forceLogout(authService: AuthService, router: Router, message?: string): void {
-  if (message) console.warn(message);
+function forceLogout(authService: AuthService, router: Router): void {
   authService.logout();
 }
