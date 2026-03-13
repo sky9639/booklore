@@ -1,37 +1,44 @@
 # ==========================
-# 核心规则：先全局忽略所有内容
+# 1. 通用缓存/临时文件（所有目录都忽略）
 # ==========================
-/*
-
-# ==========================
-# 放行需要同步/追踪的核心目录/文件
-# ==========================
-# 1. 后端服务核心
-!/booklore-api/          # Spring Boot 后端源码（容器运行必需）
-!/shared/                # 共享数据目录（容器运行必需）
-
-# 2. 前端服务核心
-!/booklore-ui/           # Angular 前端源码（容器运行必需）
-
-# 3. 打印引擎核心
-!/print-engine/          # Python 打印引擎源码（容器运行必需）
-
-# 4. 核心配置文件
-!/Dockerfile             # 多阶段构建脚本（容器构建必需）
-!/.gitignore             # 忽略规则本身（Git 追踪必需）
-!/README.md              # 说明文档（可选，用于备注配置路径）
+__pycache__/
+*.pyc
+.gradle/
+build/
+node_modules/
+dist/
 
 # ==========================
-# 细化：在放行目录内忽略不需要的子目录/文件
+# 2. 编辑器/系统垃圾文件
 # ==========================
-# 前端目录内忽略依赖/构建产物
-/booklore-ui/node_modules/
-/booklore-ui/dist/
+.claude/
+.git/
+.github/
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.tmp
 
-# 后端目录内忽略构建/缓存产物
-/booklore-api/build/
-/booklore-api/.gradle/
+# ==========================
+# 3. 你明确不要同步的目录（NAS 不拉取）
+# ==========================
+booklore_AI_Service/
 
-# 打印引擎目录内忽略 Python 缓存
-/print-engine/__pycache__/
-/print-engine/*.pyc
+# ==========================
+# 4. 废弃/文档类文件（可选，你想留就删掉对应行）
+# ==========================
+# 如果你想保留 docs/assets/example-* 就把下面这些注释掉（加 #）
+assets/
+docs/
+example-chart/
+example-docker/
+example-podman/
+CONTRIBUTING.md
+LICENSE
+SECURITY.md
+docker-compose.yml
+Dockerfile.ci
+entrypoint.sh
+.dockerignore
+.gitattributes
