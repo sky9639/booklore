@@ -26,7 +26,7 @@ python -c "import torch; torch.cuda.empty_cache(); print('[清理] GPU 显存已
 echo.
 
 :: 切换到 booklore_AI 目录
-cd /d E:\AI\booklore_AI
+cd /d E:\AI\booklore_AI_Service
 
 :: 启动 Janus API
 echo [启动] janus_api.py ...
