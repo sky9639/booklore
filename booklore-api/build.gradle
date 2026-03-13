@@ -17,6 +17,9 @@ java {
 }
 
 repositories {
+    // 优先使用阿里云公共仓库
+    maven { url 'https://maven.aliyun.com/repository/public' }
+    mavenCentral()
     mavenCentral()
 }
 
