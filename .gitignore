@@ -1,5 +1,37 @@
+# ==========================
+# 核心规则：先全局忽略所有内容
+# ==========================
 /*
-!/booklore_AI_Service/
-!/.gitignore
-__pycache__/
-*.pyc
+
+# ==========================
+# 放行需要同步/追踪的核心目录/文件
+# ==========================
+# 1. 后端服务核心
+!/booklore-api/          # Spring Boot 后端源码（容器运行必需）
+!/shared/                # 共享数据目录（容器运行必需）
+
+# 2. 前端服务核心
+!/booklore-ui/           # Angular 前端源码（容器运行必需）
+
+# 3. 打印引擎核心
+!/print-engine/          # Python 打印引擎源码（容器运行必需）
+
+# 4. 核心配置文件
+!/Dockerfile             # 多阶段构建脚本（容器构建必需）
+!/.gitignore             # 忽略规则本身（Git 追踪必需）
+!/README.md              # 说明文档（可选，用于备注配置路径）
+
+# ==========================
+# 细化：在放行目录内忽略不需要的子目录/文件
+# ==========================
+# 前端目录内忽略依赖/构建产物
+/booklore-ui/node_modules/
+/booklore-ui/dist/
+
+# 后端目录内忽略构建/缓存产物
+/booklore-api/build/
+/booklore-api/.gradle/
+
+# 打印引擎目录内忽略 Python 缓存
+/print-engine/__pycache__/
+/print-engine/*.pyc
