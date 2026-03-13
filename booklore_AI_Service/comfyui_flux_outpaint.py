@@ -12,7 +12,7 @@ import uuid
 import requests
 from PIL import Image, ImageDraw
 
-COMFYUI_URL = "http://127.0.0.1:8188"
+COMFYUI_URL = "http://0.0.0.0:8188"
 
 
 # ──────────────────────────────────────────
