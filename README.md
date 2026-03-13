@@ -1,7 +1,9 @@
+```bash
 cd /vol2/1000/software/booklore  # 进入工程根目录，确保操作路径正确
 git pull origin dev               # 拉取远程dev分支最新代码，避免本地与远程冲突
 git commit -a -m "备注本次修改的内容"  # -a自动暂存所有已追踪文件的修改/删除，无需单独git add；-m后跟本次修改的备注信息（需替换）
 git push origin dev               # 将本地提交的修改推送到GitHub的dev分支，完成同步
+```
 
 # Booklore 工程说明
 ## 重要配置路径
