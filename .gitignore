@@ -1,11 +1,44 @@
-# 5090 电脑：只追踪 booklore_AI_Service 目录
-/*
-!/booklore_AI_Service/
-!/.gitignore
+# ==========================
+# 1. 通用缓存/临时文件（所有目录都忽略）
+# ==========================
+__pycache__/
+*.pyc
+.gradle/
+build/
+node_modules/
+dist/
 
-# 通用：忽略 Python 缓存
-/booklore_AI_Service/__pycache__/
-/booklore_AI_Service/*.pyc
+# ==========================
+# 2. 编辑器/系统垃圾文件
+# ==========================
+.claude/
+.git/
+.github/
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.tmp
 
-# NAS 电脑：忽略 AI 目录（此规则对 5090 无影响，仅给 NAS 用）
+# ==========================
+# 3. 你明确不要同步的目录（NAS 不拉取）
+# ==========================
 booklore_AI_Service/
+
+# ==========================
+# 4. 废弃/文档类文件（可选，你想留就删掉对应行）
+# ==========================
+# 如果你想保留 docs/assets/example-* 就把下面这些注释掉（加 #）
+assets/
+docs/
+example-chart/
+example-docker/
+example-podman/
+CONTRIBUTING.md
+LICENSE
+SECURITY.md
+docker-compose.yml
+Dockerfile.ci
+entrypoint.sh
+.dockerignore
+.gitattributes
