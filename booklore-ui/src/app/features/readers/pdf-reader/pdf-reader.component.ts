@@ -95,7 +95,7 @@ export class PdfReaderComponent implements OnInit, OnDestroy {
 
 		  // 固定默认值（不污染阅读设置）
 		  this.page = 1;
-		  this.zoom = 'page-fit';
+		  this.zoom = 'auto';  // 使用 auto 而不是 page-fit，确保打印时使用实际尺寸
 		  this.spread = 'off';
 		  this.canPrint = true;
 
