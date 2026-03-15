@@ -603,15 +603,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       reject(new Error(data.error ?? "AI 生成失败"));
     }
   }
-            err?.error?.error ??
-            err?.error?.message ??
-            err?.message ??
-            "AI 生成请求失败";
-          reject(new Error(msg));
-        },
-      });
-    });
-  }
+
   /** 跳转到官方 PDF 阅读器（print 模式） */
   private openPdfViewer() {
     this.router.navigate(["/pdf-reader", "print", this.bookId]);
