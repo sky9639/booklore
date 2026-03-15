@@ -119,8 +119,13 @@ public class GlobalExceptionHandler {
     public void handleAsyncRequestNotUsableException(
         AsyncRequestNotUsableException ex
     ) {
-        if (ex.getCause() instanceof ClientAbortException) {
-            log.info("Request was canceled by client: {}", ex.getMessage());
+        Throwable cause = ex.getCause();
+        if (cause instanceof ClientAbortException) {
+            log.debug("SSE client disconnected (normal): {}", ex.getMessage());
+        } else if (cause instanceof java.io.IOException &&
+                   cause.getMessage() != null &&
+                   cause.getMessage().contains("Broken pipe")) {
+            log.debug("SSE client disconnected - broken pipe (normal): {}", ex.getMessage());
         } else {
             log.error(
                 "Unexpected error occurred during async request handling: ",

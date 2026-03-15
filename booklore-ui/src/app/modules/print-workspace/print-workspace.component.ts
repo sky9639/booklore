@@ -16,7 +16,7 @@ Booklore Print Workspace Component
 ============================================================
 */
 
-import { Component, OnInit, OnDestroy, HostListener } from "@angular/core";
+import { Component, OnInit, OnDestroy, HostListener, ChangeDetectorRef, ViewChild, ElementRef } from "@angular/core";
 import { Subscription } from "rxjs";
 import { CommonModule } from "@angular/common";
 import { FormsModule } from "@angular/forms";
@@ -43,6 +43,8 @@ import { TrimSize } from "./models/workspace.model";
 })
 export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   bookId = 0;
+
+  @ViewChild('aiLogContent', { static: false }) aiLogContent?: ElementRef;
 
   private compositeCache = new Map<string, string>();
   private wsSub?: Subscription;
@@ -72,6 +74,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     private preview: PreviewEngineService,
     private print: PrintService,
     public material: MaterialService,
+    private cdr: ChangeDetectorRef,
   ) {}
 
   ngOnInit(): void {
@@ -369,26 +372,73 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   }
 
   // ─────────────────────────────────────────────────────────────
-  // ★ 统一 AI 生成入口（spine + back 合并任务，一次 SSE 全程）
-  // ─────────────────────────────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════
+  // AI 生成相关
+  // ══════════════════════════════════════════════════════════════
+
   aiProgress = 0;
   aiPhaseText = "";
+  aiTotalTokens = 0;
+  aiLogMessages: Array<{
+    time: string;
+    percent: number;
+    message: string;
+    highlight?: boolean;
+  }> = [];
 
+  /**
+   * 添加日志条目并自动滚动到底部
+   *
+   * @param message 日志消息
+   * @param percent 当前进度百分比
+   * @param highlight 是否高亮显示（用于重要节点）
+   */
+  private addLog(message: string, percent: number, highlight = false): void {
+    const now = new Date();
+    const time = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+
+    this.aiLogMessages.push({ time, percent, message, highlight });
+    this.cdr.detectChanges();
+
+    // 延迟滚动确保 DOM 已更新
+    setTimeout(() => {
+      const element = this.aiLogContent?.nativeElement;
+      if (element) {
+        element.scrollTop = element.scrollHeight;
+      }
+    }, 50);
+  }
+
+  /**
+   * 清空日志记录
+   */
+  clearLogs(): void {
+    this.aiLogMessages = [];
+  }
+
+  /**
+   * 启动 AI 生成任务（书脊 + 封底）
+   */
   async onAiGenerate(): Promise<void> {
-    if (!this.canAiGenerate || this.aiGenerating) return;
+    // 防止重复点击
+    if (!this.canAiGenerate || this.aiGenerating) {
+      return;
+    }
 
+    // 初始化状态
     this.aiGenerating = true;
     this.aiLastResult = null;
     this.aiErrorMsg = "";
     this.aiProgress = 0;
     this.aiProgressText = "AI 生成中...";
     this.aiPhaseText = "准备中";
+    this.aiTotalTokens = 0;
+    this.aiLogMessages = [];
+    this.addLog("开始AI生成任务...", 0, true);
 
     const ws = this.workspace;
     if (!ws) {
-      this.aiErrorMsg = "workspace 未初始化";
-      this.aiLastResult = "error";
-      this.aiGenerating = false;
+      this.handleAiError("workspace 未初始化");
       return;
     }
 
@@ -396,33 +446,71 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       trimSize: ws.trim_size,
       pageCount: ws.page_count,
       paperThickness: ws.paper_thickness,
-      target: "all", // 后端一次完成 spine + back
+      target: "all",
     };
 
     try {
       await this._runAllWithSse(request as any);
-      this.aiLastResult = "success";
-      this.aiProgress = 100;
+      this.handleAiSuccess();
     } catch (error: unknown) {
-      this.aiLastResult = "error";
-      const e = error as { message?: string };
-      this.aiErrorMsg = e?.message ?? "网络异常，请检查服务器连接";
-      console.error("[AI Generate] 失败:", error);
+      this.handleAiError(this.extractErrorMessage(error));
     } finally {
       this.aiGenerating = false;
-      this.aiProgressText = "AI 生成书脊 & 封底";
-      this.aiPhaseText = "";
+      // 3秒后恢复按钮文字
+      setTimeout(() => {
+        this.aiProgressText = "AI 生成书脊 & 封底";
+        if (this.aiLastResult === "success") {
+          this.aiPhaseText = "";
+        }
+      }, 3000);
     }
   }
 
+  /**
+   * 处理 AI 生成成功
+   */
+  private handleAiSuccess(): void {
+    this.aiLastResult = "success";
+    this.aiProgress = 100;
+    this.aiPhaseText = this.aiTotalTokens > 0
+      ? `✅ 生成完成！消耗 ${this.aiTotalTokens} Tokens`
+      : "✅ 生成完成！";
+  }
+
+  /**
+   * 处理 AI 生成错误
+   */
+  private handleAiError(message: string): void {
+    this.aiLastResult = "error";
+    this.aiErrorMsg = message;
+    this.aiGenerating = false;
+    console.error("[AI Generate] 失败:", message);
+  }
+
+  /**
+   * 提取错误消息
+   */
+  private extractErrorMessage(error: unknown): string {
+    if (error && typeof error === 'object' && 'message' in error) {
+      return (error as { message: string }).message;
+    }
+    return "网络异常，请检查服务器连接";
+  }
+
+  /**
+   * 执行 AI 生成任务（SSE 流式接收进度）
+   */
   private _runAllWithSse(request: any): Promise<void> {
     return new Promise((resolve, reject) => {
-      // Step 1: POST start → 拿 task_id
       this.print.aiGenerateStart(this.bookId, "all", request).subscribe({
         next: (res: any) => {
+          if (!res?.task_id) {
+            reject(new Error("未获取到任务ID"));
+            return;
+          }
+
           const taskId = res.task_id;
-          // 直连 Python print-engine SSE，绕过 Java/nginx 代理避免超时断线
-          // print-engine 暴露在宿主机 5800 端口
+          // 直连 print-engine SSE 端口（5800），避免 nginx 超时
           const pythonBase = `${window.location.protocol}//${window.location.hostname}:5800`;
           const url = `${pythonBase}/workspace/ai-generate/progress/${taskId}`;
           const es = new EventSource(url);
@@ -431,50 +519,90 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
             try {
               const data = JSON.parse(event.data);
 
-              // 更新进度条
-              if (data.pct !== undefined) {
-                this.aiProgress = data.pct;
-              }
-
-              // 更新阶段文字
-              if (data.phase === "spine") {
-                this.aiPhaseText = "生成书脊中...";
-              } else if (data.phase === "back") {
-                this.aiPhaseText = "生成封底中...";
-              }
-
-              if (data.status === "done") {
-                es.close();
-                if (data.ws) {
-                  this.workspaceState.setWorkspace(data.ws);
-                  // 刷新合成预览
-                  this.compositeCache.clear();
-                  this.refreshComposite();
-                }
-                this.aiProgress = 100;
-                resolve();
-              } else if (data.status === "error") {
-                es.close();
-                reject(new Error(data.error ?? "AI 生成失败"));
-              }
+              this.handleSseMessage(data, es, resolve, reject);
             } catch (e) {
               es.close();
               reject(e);
             }
           };
 
-          es.onerror = (ev) => {
-            // 心跳行（": heartbeat"）会触发 onerror in some browsers，忽略
-            // 真正的连接断开 readyState 会变成 CLOSED(2)
+          es.onerror = () => {
+            // 心跳触发的 onerror 忽略，只处理真正的连接断开
             if (es.readyState === EventSource.CLOSED) {
               es.close();
               reject(new Error("SSE 连接断开"));
             }
-            // readyState === CONNECTING(0) 表示自动重连，不报错
           };
         },
         error: (err: any) => {
-          const msg =
+          const msg = err?.error?.error ?? err?.error?.message ?? err?.message ?? "AI 生成请求失败";
+          reject(new Error(msg));
+        },
+      });
+    });
+  }
+
+  /**
+   * 处理 SSE 消息
+   */
+  private handleSseMessage(
+    data: any,
+    es: EventSource,
+    resolve: () => void,
+    reject: (error: Error) => void
+  ): void {
+    // 更新进度
+    if (data.pct !== undefined) {
+      this.aiProgress = data.pct;
+    }
+
+    // 更新 Token 消耗
+    if (data.total_tokens !== undefined) {
+      this.aiTotalTokens = data.total_tokens;
+    }
+
+    // 更新阶段文字并记录日志
+    if (data.stage) {
+      this.aiPhaseText = data.stage;
+      const isHighlight =
+        data.stage.includes('【') ||
+        data.pct === 0 ||
+        data.pct === 50 ||
+        data.pct === 100;
+      this.addLog(data.stage, data.pct || 0, isHighlight);
+    } else if (data.phase === "spine") {
+      this.aiPhaseText = "生成书脊中...";
+    } else if (data.phase === "back") {
+      this.aiPhaseText = "生成封底中...";
+    }
+
+    // 触发变更检测
+    this.cdr.detectChanges();
+
+    // 处理完成状态
+    if (data.status === "done") {
+      es.close();
+      this.addLog("✅ 所有任务完成！", 100, true);
+
+      if (data.ws) {
+        this.workspaceState.setWorkspace(data.ws);
+        this.compositeCache.clear();
+        this.refreshComposite();
+      }
+
+      if (data.total_tokens !== undefined) {
+        this.aiTotalTokens = data.total_tokens;
+        this.addLog(`总计消耗 ${data.total_tokens} tokens`, 100);
+      }
+
+      this.aiProgress = 100;
+      resolve();
+    } else if (data.status === "error") {
+      es.close();
+      this.addLog(`❌ 生成失败: ${data.error ?? "未知错误"}`, data.pct || 0, true);
+      reject(new Error(data.error ?? "AI 生成失败"));
+    }
+  }
             err?.error?.error ??
             err?.error?.message ??
             err?.message ??

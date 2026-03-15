@@ -16,10 +16,18 @@ git push origin dev               # 将本地提交的修改推送到GitHub的de
 - print-engine/：Python 打印引擎源码
 - shared/：共享数据目录
 
-# Booklore Print Workspace — 完整方案手册 V1.1
+# Booklore Print Workspace — 完整方案手册 V2.0
 
-> **基线冻结日期：2026-03-12**
+> **基线冻结日期：2026-03-15**
 > 本手册覆盖从 AI 生图到前端拼版工作台的完整技术方案，适用于二次开发交接。
+>
+> **V2.0 重大更新（2026-03-15）：**
+> - ✅ SSE 实时进度推送已上线（替代同步等待方案）
+> - ✅ 前端实时日志显示，完整记录生成过程
+> - ✅ 代码全面优化：增强鲁棒性、可维护性、容错性
+> - ✅ 进度条与日志区域 UI 优化，完美对齐拼版预览
+> - ✅ Token 消耗实时显示
+> - ✅ 自动滚动到最新日志
 >
 > V1.1 修正：Docker挂载路径更正、ai_generator.py状态更正、Janus模型位置说明补充、PrintEngineClient超时配置补充
 
@@ -129,13 +137,13 @@ conda 环境名：  janus
 
 | 文件名 | 版本 | 状态 | 职责 |
 |--------|------|------|------|
-| `app.py` | V1.1 | ✅ 当前线上 | FastAPI 主路由 |
-| `workspace_manager.py` | — | ✅ 当前线上 | .print 目录管理，workspace.json 读写 |
-| `material_manager.py` | — | ✅ 当前线上 | 素材文件存取，history 管理 |
-| `layout_engine.py` | — | ✅ 当前线上 | 拼版布局计算，印刷 PDF 生成 |
-| `cover_extractor.py` | — | ✅ 当前线上 | 从 PDF 提取封面图 |
-| `ai_generator.py` | **V2.0** | ✅ 当前线上 | FLUX Outpainting 方案（已替换上线） |
-| `booklore.env` | — | ✅ 当前线上 | AI 渠道配置（参考 booklore.env.example） |
+| `app.py` | **V2.0** | ✅ 当前线上 | FastAPI 主路由 + SSE 进度推送 + 异步任务管理 |
+| `workspace_manager.py` | V1.0 | ✅ 当前线上 | .print 目录管理，workspace.json 读写 |
+| `material_manager.py` | V1.0 | ✅ 当前线上 | 素材文件存取，history 管理 |
+| `layout_engine.py` | V1.0 | ✅ 当前线上 | 拼版布局计算，印刷 PDF 生成 |
+| `cover_extractor.py` | V1.0 | ✅ 当前线上 | 从 PDF 提取封面图 |
+| `ai_generator.py` | **V2.1** | ✅ 当前线上 | FLUX Outpainting + 详细进度回调 + 输入参数日志 |
+| `booklore.env` | V1.0 | ✅ 当前线上 | AI 渠道配置（参考 booklore.env.example） |
 
 ### 3.3 NAS Spring Boot Backend
 
@@ -149,9 +157,9 @@ conda 环境名：  janus
 
 | 文件名 | 版本 | 状态 | 职责 |
 |--------|------|------|------|
-| `print-workspace.component.ts` | **V1.9** | ✅ 冻结 | 拼版工作台主组件 |
-| `print-workspace.component.html` | **V1.9** | ✅ 冻结 | 工作台模板 |
-| `print-workspace.component.scss` | **V1.9** | ✅ 冻结 | 工作台样式 |
+| `print-workspace.component.ts` | **V2.0** | ✅ 冻结 | 拼版工作台主组件 + SSE 处理 + 日志管理 |
+| `print-workspace.component.html` | **V2.0** | ✅ 冻结 | 工作台模板 + 日志区域 |
+| `print-workspace.component.scss` | **V2.0** | ✅ 冻结 | 工作台样式 + 进度条 + 日志样式 |
 | `material-slot.component.ts` | **V1.4** | ✅ 冻结 | 素材槽组件（封面/书脊/封底通用卡片） |
 | `workspace-state.service.ts` | **V1.3** | ✅ 冻结 | 工作台状态管理（BehaviorSubject） |
 | `material.service.ts` | **V1.2** | ✅ 冻结 | 素材上传/AI生成 HTTP 服务 |
@@ -453,9 +461,14 @@ python test_flux_outpaint.py cover.jpg "三体" --steps 10 --no-janus
 
 | 优先级 | 任务 | 说明 |
 |--------|------|------|
-| 🔴 高 | 拼版工作台按钮布局重新整理 | 用户有新界面设计需求，待新对话发图确认 |
-| 🔴 高 | 端到端集成测试 | Angular → NAS → Windows FLUX → 返回完整流程验证 |
-| 🟡 中 | SSE 异步进度推送 | `aiGenerateStart` 接口已预留，print-engine 侧 `/workspace/ai-generate/start` 尚未实现，完成后前端可显示实时生成进度，彻底解决浏览器等待问题 |
+| 🟢 低 | 端到端集成测试 | Angular → NAS → Windows FLUX → 返回完整流程验证 |
+| 🟢 低 | 性能监控 | 添加生成时间统计、成功率监控 |
+
+**已完成（V2.0）：**
+- ✅ SSE 异步进度推送
+- ✅ 前端实时日志显示
+- ✅ 代码优化与重构
+- ✅ UI 布局优化
 
 ---
 
@@ -480,15 +493,100 @@ NAS IP:                  192.168.1.x（按实际）
 Windows AI 节点 IP:      192.168.1.167
 Janus API 端口:          8788
 ComfyUI 端口:            8188
-print-engine 端口:       5000
+print-engine 端口:       5000（HTTP）
+print-engine SSE 端口:   5800（前端直连，绕过nginx超时）
 Spring Boot 端口:        6060
 
-print-engine 代码路径:   /vol2/1000/software/booklore/print-engine/
+print-engine 代码���径:   /vol2/1000/software/booklore/print-engine/
 .print 目录位置:         {书籍PDF目录}/.print/
 workspace.json 路径:     {书籍PDF目录}/.print/workspace.json
 印刷PDF路径:             {书籍PDF目录}/.print/layout_print.pdf
 
-PrintEngineClient 超时:
+SSE 配置:
+  轮询间隔:   0.1s（后端）
+  心跳间隔:   10s
+  超时时间:   20分钟
+  进度回调延迟: 0.15s（确保状态捕获）
+
+PrintEngineClient 超时（已废弃同步方案）:
   普通接口:   readTimeout = 45s
-  AI生成接口: readTimeout = 300s（5分钟）
+  AI生成接口: 已改为异步SSE，无需长超时
 ```
+
+---
+
+## 十四、V2.0 更新日志（2026-03-15）
+
+### 核心功能
+
+**SSE 实时进度推送：**
+- ✅ 前端通过 EventSource 连接 SSE 流
+- ✅ 后端异步任务管理，子线程执行生成
+- ✅ 实时推送进度、阶段、Token 消耗
+- ✅ 心跳机制保持连接活跃（每10秒）
+- ✅ 20分钟超时保护
+
+**前端实时日志：**
+- ✅ 时间 + 进度 + 详细步骤三列显示
+- ✅ 自动滚动到最新日志
+- ✅ 重要节点高亮显示
+- ✅ 输入参数完整记录（书名、作者、封面路径、尺寸等）
+- ✅ Token 消耗实时显示
+
+### 代码优化
+
+**后端 Python (app.py, ai_generator.py)：**
+- ✅ 完整的函数文档字符串（docstring）
+- ✅ 增强的错误处理和边界检查
+- ✅ 任务状态锁保护（避免并发问题）
+- ✅ SSE 轮询间隔优化（0.3s → 0.1s）
+- ✅ 进度回调延迟机制（0.15s，确保状态捕获）
+- ✅ 超时机制（20分钟）
+- ✅ 删除重复代码和冗余逻辑
+
+**前端 TypeScript (print-workspace.component.ts)：**
+- ✅ 提取辅助方法（handleAiSuccess、handleAiError、extractErrorMessage、handleSseMessage）
+- ✅ 增加完整的 JSDoc 注释
+- ✅ 增强的错误处理和空值检查
+- ✅ ViewChild 元素存在性检查
+- ✅ 防重复点击检查
+- ✅ SSE 连接状态检查
+- ✅ JSON 解析异常捕获
+
+**样式 SCSS (print-workspace.component.scss)：**
+- ✅ 删除未使用的旧样式
+- ✅ 添加清晰的分区注释
+- ✅ 统一代码格式和缩进
+- ✅ 优化日志区域高度计算（calc(100vh - 130px)）
+
+### UI 优化
+
+- ✅ 进度条移到日志标题行右侧，宽度撑满
+- ✅ 进度条样式符合 booklore 风格（深蓝色渐变）
+- ✅ 百分比居中显示在进度条内部
+- ✅ 日志区域高度与拼版预览完美对齐
+- ✅ 日志字号增大（11px → 13px）
+- ✅ 日志间距优化（8px → 4px）
+- ✅ 去掉成功消息单独行，避免高度变化
+
+### 性能优化
+
+- ✅ SSE 轮询间隔缩短（0.3s → 0.1s），减少状态丢失
+- ✅ 进度回调添加延迟（0.15s），确保 SSE 捕获所有状态
+- ✅ 前端 ChangeDetectorRef 手动触发，确保 UI 及时更新
+- ✅ 自动滚动延迟（50ms），确保 DOM 更新后再滚动
+
+### 鲁棒性提升
+
+- ✅ 增加 task_id 存在性检查
+- ✅ 增加 cover_selected 安全访问（使用 .get()）
+- ✅ 增加任务状态锁保护，避免并发问题
+- ✅ 增加超时机制（20分钟）防止任务无限挂起
+- ✅ 增加 SSE 连接断开检测和错误处理
+- ✅ 增加 workspace 空值检查
+- ✅ 增加 ViewChild 元素存在性检查
+
+---
+
+**备份说明：** 原 README.md 已备份为 README.md.backup_20260315
+

@@ -58,7 +58,7 @@ Booklore Print Workspace
 .print-params {
   grid-column: 1;
 }
-.step2 {
+.step2-wrapper {
   grid-column: 2;
 }
 .manual {
@@ -914,4 +914,195 @@ Booklore Print Workspace
     background: rgba(248, 113, 113, 0.08);
     border-color: rgba(248, 113, 113, 0.2);
   }
+}
+
+/* AI 生成进度条（内联在header中，只显示百分比） */
+/* =========================================================
+   AI 生成进度条（内联在日志标题行）
+========================================================= */
+
+.ai-progress-inline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.ai-progress-bar-inline {
+  position: relative;
+  width: 100%;
+  height: 28px;
+  background: linear-gradient(180deg, #0c1a2b 0%, #111a2b 100%);
+  border: 1px solid #2c3e55;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow:
+    inset 0 2px 4px rgba(0, 0, 0, 0.3),
+    0 2px 8px rgba(0, 0, 0, 0.2);
+
+  .ai-progress-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    background: linear-gradient(145deg, #2f6feb, #1d4ed8);
+    border-radius: 8px;
+    transition: width 0.3s ease;
+    box-shadow: 0 0 10px rgba(47, 111, 235, 0.4);
+  }
+}
+
+.ai-progress-percent {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 12px;
+  color: #e6edf3;
+  font-weight: 600;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* =========================================================
+   AI 生成日志区域
+========================================================= */
+
+.step2-wrapper {
+  position: relative;
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.step2-wrapper .card.step2 {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: none;
+}
+
+.ai-log-sidebar {
+  position: absolute;
+  right: -466px; /* 450px宽度 + 16px间距 */
+  top: 0;
+  width: 450px;
+  flex-shrink: 0;
+  padding: 12px;
+  background: rgba(30, 41, 59, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  height: calc(100vh - 130px);
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+}
+
+.ai-log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+  font-size: 13px;
+  font-weight: 600;
+  color: #94a3b8;
+  gap: 12px;
+
+  > span {
+    flex-shrink: 0;
+  }
+}
+
+.ai-log-content {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 13px;
+  line-height: 1.8;
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 4px;
+
+  /* 自定义滚动条 */
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: rgba(148, 163, 184, 0.1);
+    border-radius: 3px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.3);
+    border-radius: 3px;
+
+    &:hover {
+      background: rgba(148, 163, 184, 0.5);
+    }
+  }
+}
+
+.ai-log-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 20px;
+  color: #64748b;
+  text-align: center;
+
+  i {
+    font-size: 32px;
+    opacity: 0.5;
+  }
+
+  span {
+    font-size: 12px;
+    line-height: 1.5;
+  }
+}
+
+.ai-log-item {
+  display: flex;
+  gap: 4px;
+  padding: 4px 0;
+  color: #cbd5e1;
+  transition: background 0.2s;
+
+  &:hover {
+    background: rgba(148, 163, 184, 0.05);
+  }
+
+  &.ai-log-highlight {
+    color: #a78bfa;
+    font-weight: 500;
+  }
+
+  /* 分隔线样式 */
+  &:has(.ai-log-message:contains("=====")) {
+    border-top: 1px dashed rgba(148, 163, 184, 0.3);
+    margin-top: 8px;
+    padding-top: 12px;
+  }
+}
+
+.ai-log-time {
+  color: #64748b;
+  min-width: 60px;
+  flex-shrink: 0;
+}
+
+.ai-log-percent {
+  color: #64748b;
+  min-width: 35px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.ai-log-message {
+  flex: 1;
+  word-break: break-word;
 }

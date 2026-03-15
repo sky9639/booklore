@@ -97,34 +97,30 @@
   </div>
 
   <!-- ===================== STEP2 素材准备 ===================== -->
-  <div class="card step2">
-    <div class="section-header" style="margin-bottom: 12px">
-      <div class="section-title" style="margin-bottom: 0">🧩 素材准备</div>
-      <button
-        class="blue-action-btn ai-generate-btn"
-        [class.loading]="aiGenerating"
-        [disabled]="aiGenerating || !canAiGenerate"
-        (click)="onAiGenerate()"
-        [title]="
-          canAiGenerate ? 'AI自动生成书脊和封底图片' : '请先上传封面素材'
-        "
-      >
-        <span class="btn-spinner" *ngIf="aiGenerating"></span>
-        <span *ngIf="!aiGenerating">✨</span>
-        {{ aiGenerating ? aiProgressText : "AI 生成书脊 & 封底" }}
-      </button>
-    </div>
+  <div class="step2-wrapper">
+    <div class="card step2">
+      <div class="section-header" style="margin-bottom: 12px">
+        <div class="section-title" style="margin-bottom: 0">🧩 素材准备</div>
 
-    <div
-      class="ai-status-bar ai-status-center"
-      *ngIf="aiLastResult === 'success'"
-    >
-      <i class="pi pi-check-circle"></i> 书脊 & 封底已生成成功
-    </div>
-    <div class="ai-status-bar ai-status-error" *ngIf="aiLastResult === 'error'">
-      <i class="pi pi-exclamation-triangle"></i> 生成失败：{{ aiErrorMsg }}
-    </div>
-    <div class="section-content material-grid">
+        <button
+          class="blue-action-btn ai-generate-btn"
+          [class.loading]="aiGenerating"
+          [disabled]="aiGenerating || !canAiGenerate"
+          (click)="onAiGenerate()"
+          [title]="
+            canAiGenerate ? 'AI自动生成书脊和封底图片' : '请先上传封面素材'
+          "
+        >
+          <span class="btn-spinner" *ngIf="aiGenerating"></span>
+          <span *ngIf="!aiGenerating">✨</span>
+          {{ aiGenerating ? aiProgressText : "AI 生成书脊 & 封底" }}
+        </button>
+      </div>
+
+      <div class="ai-status-bar ai-status-error" *ngIf="aiLastResult === 'error'">
+        <i class="pi pi-exclamation-triangle"></i> 生成失败：{{ aiErrorMsg }}
+      </div>
+      <div class="section-content material-grid">
       <!--
         [V1.8 问题1] 监听 previewRequest 事件，调用 openLightbox
         替换原来的 openPreview(window.open) 逻辑
@@ -167,6 +163,33 @@
         (deleted)="onMaterialDeleted($event)"
         (uploaded)="onMaterialUploaded()"
       ></app-material-slot>
+    </div>
+    </div>
+
+    <!-- 右侧：AI生成日志（常驻显示） -->
+    <div class="ai-log-sidebar">
+      <div class="ai-log-header">
+        <span>📋 生成日志</span>
+
+        <!-- AI 生成进度条（移到日志标题行右侧） -->
+        <div class="ai-progress-inline" *ngIf="aiGenerating || aiLastResult === 'success'">
+          <div class="ai-progress-bar-inline">
+            <div class="ai-progress-fill" [style.width.%]="aiProgress"></div>
+            <span class="ai-progress-percent">{{ aiProgress }}%</span>
+          </div>
+        </div>
+      </div>
+      <div class="ai-log-content" #aiLogContent>
+        <div class="ai-log-empty" *ngIf="aiLogMessages.length === 0">
+          <i class="pi pi-info-circle"></i>
+          <span>暂无日志，点击"AI 生成书脊 & 封底"开始生成</span>
+        </div>
+        <div class="ai-log-item" *ngFor="let log of aiLogMessages" [class.ai-log-highlight]="log.highlight">
+          <span class="ai-log-time">{{ log.time }}</span>
+          <span class="ai-log-percent">{{ log.percent }}%</span>
+          <span class="ai-log-message">{{ log.message }}</span>
+        </div>
+      </div>
     </div>
   </div>
 

@@ -102,11 +102,21 @@ public class PrintController {
             Path targetDir = printRoot.resolve(category);
             targetDir.toFile().mkdirs();
 
+            // 获取原始文件名和扩展名
             String original = file.getOriginalFilename();
-            if (original == null) original = "image";
-            original = original.replaceAll("\\s+", "_");
+            if (original == null) original = "image.jpg";
 
-            String filename = System.currentTimeMillis() + "_" + original;
+            // 提取扩展名
+            String extension = "";
+            int dotIndex = original.lastIndexOf('.');
+            if (dotIndex > 0 && dotIndex < original.length() - 1) {
+                extension = original.substring(dotIndex); // 包含点号，如 ".jpg"
+            } else {
+                extension = ".jpg"; // 默认扩展名
+            }
+
+            // 使用时间戳 + 扩展名作为文件名，避免特殊字符问题
+            String filename = System.currentTimeMillis() + extension;
             Path target = targetDir.resolve(filename);
             file.transferTo(target.toFile());
 
@@ -672,10 +682,10 @@ public class PrintController {
             payload.put("paper_thickness", paperThickness);
             payload.put("book_page_count", pageCount);
 
-            // ── 必填项校验：书名 / 作者 / 简介 / 封面 缺一不可 ──────────────
-            // 封面已在上方校验（cover_selected 不为空）
+            // ── 必填项校验：封面 + 书名 ──────────────────────────────────────
             var meta = book.getMetadata();
 
+            // 1. 书名（必填）
             String bookTitle = (meta != null && meta.getTitle() != null)
                 ? meta.getTitle().trim()
                 : "";
@@ -688,6 +698,7 @@ public class PrintController {
                 );
             }
 
+            // 2. 作者（可选，默认 "Unknown Author"）
             List<String> authors = new ArrayList<>();
             if (meta != null && meta.getAuthors() != null) {
                 meta
@@ -699,29 +710,35 @@ public class PrintController {
                     });
             }
             if (authors.isEmpty()) {
-                return ResponseEntity.badRequest().body(
-                    Map.of(
-                        "error",
-                        "缺少作者信息，请在图书详情页补充元数据后再生成"
-                    )
-                );
+                authors.add("Unknown Author");
             }
 
+            // 3. 简介（可选，默认通用描述）
             String desc = (meta != null) ? meta.getDescription() : null;
             if (desc == null || desc.isBlank()) {
-                return ResponseEntity.badRequest().body(
-                    Map.of(
-                        "error",
-                        "缺少图书简介，请在图书详情页补充元数据后再生成"
-                    )
-                );
+                desc = "A captivating story that will keep you turning pages.";
             }
             if (desc.length() > 800) desc = desc.substring(0, 800);
+
+            // 4. 分类（可选，默认 "children's book, cartoon style"）
+            List<String> categories = new ArrayList<>();
+            if (meta != null && meta.getCategories() != null && !meta.getCategories().isEmpty()) {
+                meta.getCategories().forEach(cat -> {
+                    if (cat.getName() != null && !cat.getName().isBlank()) {
+                        categories.add(cat.getName());
+                    }
+                });
+            }
+            if (categories.isEmpty()) {
+                categories.add("children's book");
+                categories.add("cartoon style");
+            }
 
             // ── 组装 payload ──────────────────────────────────────────────────
             payload.put("book_title", bookTitle);
             payload.put("authors", authors);
             payload.put("description", desc);
+            payload.put("categories", categories);
             payload.put(
                 "spine_width_mm",
                 request.getPaperThickness() != null &&

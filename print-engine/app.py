@@ -300,7 +300,7 @@ class AiGenerateRequest(BaseModel):
     book_title: str | None = None
     authors: list[str] = []
     description: str | None = None
-    categories: list[str] = []
+    categories: list[str] = ["children's book"]  # 默认儿童图书（与本地测试一致）
     trim_size: str = "A5"
     spine_width_mm: float = 4.74
     count: int = 1
@@ -315,31 +315,65 @@ def _run_ai_task_all(
     ws: dict,
 ):
     """
-    子线程：依次生成 spine(0~50%) + back(50~100%)
-    进度实时写入 _ai_tasks[task_id]["pct"]
-    每步完成后写入 _ai_tasks[task_id]["spine_done"] / "back_done"
+    AI生成任务主线程
+
+    依次生成 spine(0~50%) + back(50~100%)，或单独生成指定目标
+    进度实时写入 _ai_tasks[task_id]，通过 SSE 推送到前端
+
+    Args:
+        task_id: 任务唯一标识
+        request: 生成请求参数
+        print_root: 素材存储根目录
+        cover_selected: 封面文件名
+        ws: workspace 状态字典
     """
     targets = ["spine", "back"] if request.target == "all" else [request.target]
     n = len(targets)
+    total_tokens = 0
 
     def _make_cb(phase_start: int, phase_end: int):
-        def _cb(pct: int):
+        """
+        创建进度回调函数，将 0-100% 映射到指定区间
+
+        Args:
+            phase_start: 阶段起始百分比（0-100）
+            phase_end: 阶段结束百分比（0-100）
+
+        Returns:
+            回调函数，接收 (pct, stage) 参数
+        """
+        def _cb(pct: int, stage: str = ""):
+            import time as _t
+
+            # 将子任务进度映射到总进度
             mapped = phase_start + int((pct / 100) * (phase_end - phase_start))
+
             with _ai_tasks_lock:
                 if task_id in _ai_tasks:
                     _ai_tasks[task_id]["pct"] = min(mapped, phase_end - 1)
+                    if stage:
+                        _ai_tasks[task_id]["stage"] = stage
+
+            # 短暂延迟确保 SSE 轮询能捕获每个状态变化
+            # 避免快速连续更新导致中间状态被跳过
+            if stage:
+                _t.sleep(0.15)
 
         return _cb
 
     try:
         for i, target in enumerate(targets):
+            # 计算当前目标的进度区间
             phase_start = int(i * 100 / n)
             phase_end = int((i + 1) * 100 / n)
 
+            # 更新当前阶段
             with _ai_tasks_lock:
-                _ai_tasks[task_id]["phase"] = target
+                if task_id in _ai_tasks:
+                    _ai_tasks[task_id]["phase"] = target
 
-            filenames = generate_ai_material(
+            # 调用 AI 生成
+            result = generate_ai_material(
                 print_root=print_root,
                 cover_filename=cover_selected,
                 target=target,
@@ -354,58 +388,86 @@ def _run_ai_task_all(
                 progress_callback=_make_cb(phase_start, phase_end),
             )
 
+            # 处理返回值：兼容 (filenames, token_usage) 和 filenames 两种格式
+            filenames = None
+            if isinstance(result, tuple) and len(result) == 2:
+                filenames, token_usage = result
+                if token_usage and isinstance(token_usage, dict):
+                    total_tokens += token_usage.get("total_tokens", 0)
+            else:
+                filenames = result
+
             if not filenames:
                 raise RuntimeError(f"{target} AI generation produced no results")
 
+            # 更新 workspace 历史记录
             for filename in reversed(filenames):
                 update_history(ws, target, filename)
             ws[target]["selected"] = filenames[0]
             touch_workspace(ws)
             save_workspace(request.book_path, ws)
 
+            # 记录完成状态
             with _ai_tasks_lock:
-                _ai_tasks[task_id][f"{target}_done"] = filenames[0]
-                _ai_tasks[task_id]["pct"] = phase_end
+                if task_id in _ai_tasks:
+                    _ai_tasks[task_id][f"{target}_done"] = filenames[0]
+                    _ai_tasks[task_id]["pct"] = phase_end
+                    _ai_tasks[task_id]["total_tokens"] = total_tokens
 
-        # done 前重新从磁盘读最新 workspace（合并生成中用户的删除操作）
+        # 重新加载 workspace，合并生成期间用户可能的其他操作
         fresh_ws = load_workspace(request.book_path) or ws
-        # 把本次 AI 生成的文件合并到最新 workspace
+
+        # 将本次生成的文件合并到最新 workspace
         for tgt in targets:
             done_file = _ai_tasks.get(task_id, {}).get(f"{tgt}_done")
             if done_file and tgt in fresh_ws:
-                # 确保新文件在 history 第一位，selected 指向它
                 hist = fresh_ws[tgt].get("history") or []
                 if done_file not in hist:
                     hist.insert(0, done_file)
-                    fresh_ws[tgt]["history"] = hist[:5]
+                    fresh_ws[tgt]["history"] = hist[:5]  # 保留最近5个
                 fresh_ws[tgt]["selected"] = done_file
 
+        # 标记任务完成
         with _ai_tasks_lock:
-            _ai_tasks[task_id]["pct"] = 100
-            _ai_tasks[task_id]["status"] = "done"
-            _ai_tasks[task_id]["ws"] = fresh_ws
+            if task_id in _ai_tasks:
+                _ai_tasks[task_id]["pct"] = 100
+                _ai_tasks[task_id]["status"] = "done"
+                _ai_tasks[task_id]["ws"] = fresh_ws
+                _ai_tasks[task_id]["total_tokens"] = total_tokens
+                if total_tokens > 0:
+                    _ai_tasks[task_id]["stage"] = f"生成完成，本次消耗 {total_tokens} tokens"
 
     except Exception as e:
         import traceback
-
         traceback.print_exc()
         with _ai_tasks_lock:
-            _ai_tasks[task_id]["status"] = "error"
-            _ai_tasks[task_id]["error"] = str(e)
+            if task_id in _ai_tasks:
+                _ai_tasks[task_id]["status"] = "error"
+                _ai_tasks[task_id]["error"] = str(e)
 
 
 @app.post("/workspace/ai-generate/start")
 def ai_generate_start(request: AiGenerateRequest):
     """
-    启动 AI 生成任务，立即返回 task_id。
-    target="all"（默认）：依次生成书脊和封底，进度 0~100%
-    target="spine"|"back"：只生成单个，进度 0~100%
+    启动 AI 生成任务
+
+    Args:
+        request: 生成请求参数
+            - target: "all"（默认）生成书脊和封底，"spine"/"back" 单独生成
+            - book_path: 书籍路径
+            - 其他参数见 AiGenerateRequest
+
+    Returns:
+        {"task_id": "uuid"} 用于查询进度
+
+    Raises:
+        HTTPException: workspace 不存在、封面未选择、target 参数非法
     """
     ws = load_workspace(request.book_path)
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
-    cover_selected = ws["cover"].get("selected")
+    cover_selected = ws.get("cover", {}).get("selected")
     if not cover_selected:
         raise HTTPException(status_code=400, detail="No cover image selected")
 
@@ -415,9 +477,17 @@ def ai_generate_start(request: AiGenerateRequest):
     task_id = str(uuid.uuid4())
     print_root = get_print_root(request.book_path)
 
+    # 初始化任务状态
     with _ai_tasks_lock:
-        _ai_tasks[task_id] = {"status": "running", "pct": 0, "phase": "starting"}
+        _ai_tasks[task_id] = {
+            "status": "running",
+            "pct": 0,
+            "phase": "starting",
+            "stage": "准备开始生成...",
+            "total_tokens": 0
+        }
 
+    # 启动后台线程执行生成任务
     threading.Thread(
         target=_run_ai_task_all,
         args=(task_id, request, print_root, cover_selected, ws),
@@ -430,21 +500,30 @@ def ai_generate_start(request: AiGenerateRequest):
 @app.get("/workspace/ai-generate/progress/{task_id}")
 def ai_generate_progress(task_id: str):
     """
-    SSE 流，实时推送进度。
+    SSE 流式推送 AI 生成进度
+
     事件格式：
-        {"pct": 45,  "status": "running", "phase": "spine"}
-        {"pct": 100, "status": "done",    "ws": {...}}
-        {"pct": 0,   "status": "error",   "error": "..."}
-    心跳（每10秒）：": heartbeat" — 前端 EventSource 忽略，但保持连接活跃
+        - 进度更新: {"pct": 45, "status": "running", "phase": "spine", "stage": "...", "total_tokens": 100}
+        - 完成: {"pct": 100, "status": "done", "ws": {...}, "total_tokens": 916}
+        - 错误: {"pct": 0, "status": "error", "error": "..."}
+        - 心跳: ": heartbeat" (每10秒，保持连接活跃)
+
+    Args:
+        task_id: 任务ID（由 /start 接口返回）
+
+    Returns:
+        StreamingResponse: text/event-stream 格式的 SSE 流
     """
     import time as _time
 
     def _stream():
         last_pct = -1
+        last_stage = ""
         last_heartbeat = _time.time()
-        deadline = _time.time() + 1200  # 20分钟上限
+        deadline = _time.time() + 1200  # 20分钟超时
 
         while _time.time() < deadline:
+            # 读取任务状态（复制一份避免长时间持锁）
             with _ai_tasks_lock:
                 task = dict(_ai_tasks.get(task_id, {}))
 
@@ -455,30 +534,57 @@ def ai_generate_progress(task_id: str):
             pct = task.get("pct", 0)
             status = task.get("status", "running")
             phase = task.get("phase", "")
+            stage = task.get("stage", "")
+            total_tokens = task.get("total_tokens", 0)
 
+            # 任务完成
             if status == "done":
-                yield f"data: {json.dumps({'pct': 100, 'status': 'done', 'ws': task.get('ws', {})})}\n\n"
+                done_data = {
+                    'pct': 100,
+                    'status': 'done',
+                    'ws': task.get('ws', {}),
+                    'total_tokens': total_tokens
+                }
+                if stage:
+                    done_data['stage'] = stage
+                yield f"data: {json.dumps(done_data)}\n\n"
+
+                # 清理任务记录
                 with _ai_tasks_lock:
                     _ai_tasks.pop(task_id, None)
                 return
 
+            # 任务失败
             if status == "error":
                 yield f"data: {json.dumps({'pct': pct, 'status': 'error', 'error': task.get('error', '未知错误')})}\n\n"
                 with _ai_tasks_lock:
                     _ai_tasks.pop(task_id, None)
                 return
 
-            if pct != last_pct:
+            # 进度或阶段有变化，推送更新
+            if pct != last_pct or stage != last_stage:
                 last_pct = pct
+                last_stage = stage
                 last_heartbeat = _time.time()
-                yield f"data: {json.dumps({'pct': pct, 'status': 'running', 'phase': phase})}\n\n"
 
+                progress_data = {'pct': pct, 'status': 'running', 'phase': phase}
+                if stage:
+                    progress_data['stage'] = stage
+                if total_tokens > 0:
+                    progress_data['total_tokens'] = total_tokens
+
+                yield f"data: {json.dumps(progress_data)}\n\n"
+
+            # 发送心跳保持连接
             elif _time.time() - last_heartbeat > 10:
                 last_heartbeat = _time.time()
                 yield ": heartbeat\n\n"
 
-            _time.sleep(0.3)
+            # 轮询间隔（缩短以减少状态丢失）
+            _time.sleep(0.1)
 
+        # 超时
+        yield f"data: {json.dumps({'status': 'error', 'error': 'generation timeout (20min)'})}\n\n"
         yield f"data: {json.dumps({'status': 'error', 'error': 'generation timeout (20min)'})}\n\n"
 
     return StreamingResponse(

@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
 """
 ai_generator.py  —  Booklore Print Engine
-版本：V3.0
+版本：V4.0 (Claude API + SDXL + IP-Adapter)
 
-修复内容（相较旧版）：
-1. Janus 调用方式修正：改为 JSON body + image_base64，传入 target/authors/description/categories
-2. ComfyUI 工作流修正：采用已验证的 comfyui_flux_outpaint.py 节点结构
-   - 先 /upload/image 上传图片，用文件名引用（而非 base64）
-   - 加入 ImageToMask 节点（channel="red"）
-   - 加入 FluxGuidance 节点（guidance=3.5）
-   - grow_mask_by=0，steps=20，weight_dtype=fp8_e4m3fn_fast
-3. 画布构建逻辑修正：与 comfyui_flux_outpaint.py 完全一致
-   - 封底参考宽 = min(cover_w, back_width_px)
-   - 书脊参考宽 = spine_width_px * 4
-4. 新增 WebSocket 进度推送：通过 progress_callback 回调传递步数百分比
-5. 生成顺序固定：先 back（封底）再 spine（书脊），与已验证脚本一致
+更新内容（V4.0）：
+1. ✅ 替换 Janus API 为 Claude Sonnet 4.6 进行封面风格分析
+2. ✅ 使用 SDXL + IP-Adapter 生成逻辑（封面作为参考图）
+3. ✅ 添加缓存机制减少 Claude API 调用成本
+4. ✅ Token 优化：图片缩放到 800px，精简 Prompt
+5. ✅ 实时进度条：中文阶段描述 + Token 消耗统计
 
 配置从 booklore.env 读取：
     COMFYUI_API_URL=http://ROG:8188
-    JANUS_API_URL=http://ROG:8788
+    CLAUDE_API_KEY=sk-xxx
+    CLAUDE_API_URL=http://newapi.200m.997555.xyz
+    CLAUDE_MODEL=claude-sonnet-4-6
+    CACHE_ENABLED=True
+    CACHE_DIR=./cache
 """
 
 import asyncio
@@ -40,10 +38,42 @@ from PIL import Image, ImageDraw, ImageFont
 load_dotenv("booklore.env")
 
 COMFYUI_API_URL = os.getenv("COMFYUI_API_URL", "http://ROG:8188")
-JANUS_API_URL = os.getenv("JANUS_API_URL", "http://ROG:8788")
 
-logging.basicConfig(level=logging.INFO)
+# Claude API 配置
+CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")
+CLAUDE_API_URL = os.getenv("CLAUDE_API_URL", "https://api.anthropic.com")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+
+# 缓存配置
+CACHE_ENABLED = os.getenv("CACHE_ENABLED", "True").lower() == "true"
+CACHE_DIR = os.getenv("CACHE_DIR", "./cache")
+
+# 生成模型配置
+GENERATION_MODEL = os.getenv("GENERATION_MODEL", "SDXL")  # 可配置：SDXL, FLUX, SD3等
+GENERATION_STRATEGY = os.getenv("GENERATION_STRATEGY", "crop")  # 可配置：crop, outpaint等
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 logger = logging.getLogger(__name__)
+
+# 初始化 Claude 分析器
+from claude_analyzer import ClaudeAnalyzer
+
+_claude_analyzer = None
+if CLAUDE_API_KEY:
+    _claude_analyzer = ClaudeAnalyzer(
+        api_key=CLAUDE_API_KEY,
+        api_url=CLAUDE_API_URL,
+        model=CLAUDE_MODEL,
+        cache_dir=None,  # 禁用缓存，每次重新分析
+        cache_ttl=3600,
+    )
+    logger.info(f"[Claude] 分析器已初始化: {CLAUDE_MODEL}")
+else:
+    logger.warning("[Claude] API Key 未配置，将使用默认 Prompt")
 
 
 # ─── 字体自动探测 ────────────────────────────────────────────────────────────
@@ -100,52 +130,78 @@ TRIM_SIZE_PX = {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Janus 风格分析（修正版）
-# 接口：POST http://ROG:8788/analyze
-# Body：JSON { image_base64, target, book_title, authors, description, categories }
-# 返回：{ "prompt": "..." }
+# Claude 风格分析（V4.0 新增）
+# 使用 Claude Sonnet 4.6 替代 Janus
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _analyze_style(
+def _analyze_style_with_claude(
     front_img: Image.Image,
     target: str,
     book_title: str,
     authors: list,
     description: str,
     categories: list,
-) -> str:
-    """调用 Janus API 分析封面风格，返回英文 prompt 字符串。失败时返回空字符串。"""
+    request_id: str = "",
+) -> dict:
+    """
+    使用 Claude API 分析封面风格
+
+    返回:
+        {
+            "style_analysis": str,
+            "back_cover_prompt": str,
+            "spine_prompt": str,
+            "ipadapter_weight": float,
+            "recommended_steps": int
+        }
+    """
+    if not _claude_analyzer:
+        logger.warning(f"[{request_id}] Claude 未配置，使用默认 Prompt")
+        return {
+            "style_analysis": "Claude API not configured",
+            "back_cover_prompt": "seamless extension, natural continuation, open space for text, decorative elements",
+            "spine_prompt": "seamless narrow extension, natural continuation",
+            "ipadapter_weight": 1.0,
+            "recommended_steps": 20,
+        }
+
     try:
+        # 转换图片为字节
         buf = io.BytesIO()
         front_img.save(buf, format="PNG")
-        image_b64 = base64.b64encode(buf.getvalue()).decode()
+        image_bytes = buf.getvalue()
 
-        resp = requests.post(
-            f"{JANUS_API_URL}/analyze",
-            json={
-                "image_base64": image_b64,
-                "target": target,
-                "book_title": book_title,
-                "authors": authors,
-                "description": description,
-                "categories": categories,
-            },
-            timeout=120,
-        )
-        resp.raise_for_status()
-        prompt = resp.json().get("prompt", "")
-        logger.info(f"[Janus] {target} prompt: {prompt[:80]}...")
-        return prompt
+        # 构建书籍信息
+        book_info = {
+            "title": book_title,
+            "authors": authors,
+            "description": description,
+            "categories": categories,
+        }
+
+        # 调用 Claude 分析
+        result = _claude_analyzer.analyze_cover(image_bytes, book_info, request_id)
+
+        logger.info(f"[{request_id}] Claude 分析完成: {result.get('style_analysis', '')[:80]}...")
+
+        return result
+
     except Exception as e:
-        logger.warning(f"[Janus] 风格分析失败，使用默认 prompt: {e}")
-        return ""
+        logger.error(f"[{request_id}] Claude 分析失败: {e}", exc_info=True)
+        return {
+            "style_analysis": f"Analysis failed: {e}",
+            "back_cover_prompt": "seamless extension, natural continuation, open space for text, decorative elements",
+            "spine_prompt": "seamless narrow extension, natural continuation",
+            "ipadapter_weight": 1.0,
+            "recommended_steps": 20,
+        }
 
 
 def _parse_janus_to_tags(style: str) -> str:
     """
-    清洗 Janus 编号列表格式，只保留前4行（风格+天空色+地面色+光照），
-    丢弃第5行内容词（避免 scattered bones / castle 等干扰生成内容）。
+    清洗风格描述，提取关键标签
+    （保留此函数以兼容旧代码，但 Claude 返回的已经是清洗后的标签）
     """
     import re
 
@@ -180,31 +236,35 @@ def _upload_image(img_bytes: bytes, filename: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _build_flux_workflow(
+def _build_sdxl_ipadapter_workflow(
     canvas_fn: str,
     mask_fn: str,
     prompt: str,
     seed: int,
     steps: int = 20,
-    guidance: float = 3.5,
+    reference_image_fn: str = None,
+    ipadapter_weight: float = 1.0,
 ) -> dict:
-    return {
+    """
+    构建 SDXL + IP-Adapter 工作流（完全复用本地测试逻辑）
+
+    Args:
+        canvas_fn: 画布图片文件名
+        mask_fn: 遮罩图片文件名
+        prompt: 生成 Prompt
+        seed: 随机种子
+        steps: 生成步数
+        reference_image_fn: 参考图片文件名（封面原图，用于 IP-Adapter）
+        ipadapter_weight: IP-Adapter 权重 (0.7-1.5，推荐 1.0)
+    """
+    workflow = {
         "1": {
-            "class_type": "UNETLoader",
+            "class_type": "CheckpointLoaderSimple",
             "inputs": {
-                "unet_name": "flux1-dev.safetensors",
-                "weight_dtype": "fp8_e4m3fn_fast",
+                "ckpt_name": "sd_xl_base_1.0.safetensors",
             },
         },
-        "2": {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}},
-        "5": {
-            "class_type": "DualCLIPLoader",
-            "inputs": {
-                "clip_name1": "clip_l.safetensors",
-                "clip_name2": "t5xxl_fp8_e4m3fn.safetensors",
-                "type": "flux",
-            },
-        },
+        "2": {"class_type": "VAELoader", "inputs": {"vae_name": "sdxl_vae.safetensors"}},
         "6": {"class_type": "LoadImage", "inputs": {"image": canvas_fn}},
         "7": {"class_type": "LoadImage", "inputs": {"image": mask_fn}},
         "8": {
@@ -217,50 +277,125 @@ def _build_flux_workflow(
                 "pixels": ["6", 0],
                 "vae": ["2", 0],
                 "mask": ["8", 0],
-                "grow_mask_by": 0,  # 已验证：0，不扩展边缘
+                "grow_mask_by": 6,  # SDXL 需要扩展边缘
             },
         },
         "10": {
             "class_type": "CLIPTextEncode",
-            "inputs": {"clip": ["5", 0], "text": prompt},
+            "inputs": {"clip": ["1", 1], "text": prompt},
         },
         "11": {
             "class_type": "CLIPTextEncode",
-            "inputs": {"clip": ["5", 0], "text": ""},
-        },
-        "12": {
-            "class_type": "FluxGuidance",
-            "inputs": {"conditioning": ["10", 0], "guidance": guidance},
-        },
-        "13": {
-            "class_type": "KSampler",
-            "inputs": {
-                "model": ["1", 0],
-                "positive": ["12", 0],
-                "negative": ["11", 0],
-                "latent_image": ["9", 0],
-                "seed": seed,
-                "steps": steps,
-                "cfg": 1.0,
-                "sampler_name": "euler",
-                "scheduler": "simple",
-                "denoise": 1.0,
-            },
-        },
-        "14": {
-            "class_type": "VAEDecode",
-            "inputs": {"samples": ["13", 0], "vae": ["2", 0]},
-        },
-        "15": {
-            "class_type": "SaveImage",
-            "inputs": {"images": ["14", 0], "filename_prefix": "booklore_"},
+            "inputs": {"clip": ["1", 1], "text": "blurry, low quality, distorted, text, watermark, signature"},
         },
     }
 
+    # 如果提供了参考图，使用 IP-Adapter（关键！）
+    if reference_image_fn:
+        workflow["16"] = {
+            "class_type": "LoadImage",
+            "inputs": {"image": reference_image_fn}
+        }
+        workflow["17"] = {
+            "class_type": "AV_IPAdapter",
+            "inputs": {
+                "ip_adapter_name": "sdxl_models\\ip-adapter-plus_sdxl_vit-h.safetensors",
+                "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
+                "model": ["1", 0],
+                "image": ["16", 0],
+                "weight": ipadapter_weight,
+                "weight_type": "style transfer",
+                "start_at": 0.0,
+                "end_at": 1.0,
+                "enabled": True,
+            }
+        }
+        model_source = ["17", 0]
+    else:
+        model_source = ["1", 0]
+
+    workflow["13"] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "model": model_source,
+            "positive": ["10", 0],
+            "negative": ["11", 0],
+            "latent_image": ["9", 0],
+            "seed": seed,
+            "steps": steps,
+            "cfg": 7.0,
+            "sampler_name": "dpmpp_2m",
+            "scheduler": "karras",
+            "denoise": 1.0,
+        },
+    }
+    workflow["14"] = {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["13", 0], "vae": ["2", 0]},
+    }
+    workflow["15"] = {
+        "class_type": "SaveImage",
+        "inputs": {"images": ["14", 0], "filename_prefix": "booklore_"},
+    }
+
+    return workflow
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ComfyUI：提交 workflow + WebSocket 实时进度
-# progress_callback(step, total_steps, phase_start_pct, phase_end_pct)
+# ComfyUI：提交 workflow + 轮询结果（SDXL 版本，简化版）
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _run_workflow_simple(workflow: dict, timeout: int = 600) -> bytes:
+    """
+    提交 ComfyUI workflow，轮询获取结果（SDXL 用这个就够了）
+
+    Args:
+        workflow: ComfyUI 工作流
+        timeout: 超时时间（秒）
+
+    Returns:
+        生成的图片字节
+    """
+    client_id = str(uuid.uuid4())
+
+    # 1. 提交 prompt
+    resp = requests.post(
+        f"{COMFYUI_API_URL}/prompt",
+        json={"prompt": workflow, "client_id": client_id},
+        timeout=15,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"ComfyUI 提交失败: {resp.text}")
+    prompt_id = resp.json()["prompt_id"]
+    logger.info(f"[ComfyUI] 任务已提交: {prompt_id}")
+
+    # 2. 轮询 history 获取结果
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(1)
+        hist = requests.get(f"{COMFYUI_API_URL}/history/{prompt_id}", timeout=10).json()
+        if prompt_id in hist:
+            for node_out in hist[prompt_id].get("outputs", {}).values():
+                for img_info in node_out.get("images", []):
+                    r = requests.get(
+                        f"{COMFYUI_API_URL}/view",
+                        params={
+                            "filename": img_info["filename"],
+                            "subfolder": img_info.get("subfolder", ""),
+                            "type": img_info.get("type", "output"),
+                        },
+                        timeout=15,
+                    )
+                    r.raise_for_status()
+                    logger.info(f"[ComfyUI] 图片取回完成: {img_info['filename']}")
+                    return r.content
+
+    raise TimeoutError(f"[ComfyUI] 取结果超时: {prompt_id}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ComfyUI：提交 workflow + WebSocket 实时进度（FLUX 版本，保留但不用）
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -608,13 +743,13 @@ def generate_ai_material(
     spine_width_mm: float = 4.74,
     count: int = 1,
     quality: str = "medium",
-    progress_callback: Optional[Callable[[int], None]] = None,
-) -> list[str]:
+    progress_callback: Optional[Callable[[int, str], None]] = None,  # 修改：添加阶段说明参数
+) -> tuple[list[str], dict]:
     """
     生成书脊或封底图片，保存到 print_root/{target}/。
-    返回生成的文件名列表（最新在前）。
+    返回 (文件名列表, token_usage字典)。
 
-    progress_callback(pct: int)  ← 整体进度 0~100
+    progress_callback(pct: int, stage: str)  ← 整体进度 0~100 + 中文阶段说明
     """
     authors = authors or []
     categories = categories or []
@@ -642,47 +777,103 @@ def generate_ai_material(
         f"[AI] target={target} trim={trim_size} cover={cw}x{page_h} spine_px={spine_px}"
     )
 
-    # ── 3. Janus 风格分析（修正版调用）──────────────────────────────────────
-    if progress_callback:
-        progress_callback(3)
+    # ── 0. 打印输入信息 ──────────────────────────────────────────────────────────
+    target_name = "书脊" if target == "spine" else "封底"
 
-    style_desc = _analyze_style(
+    if progress_callback:
+        progress_callback(0, f"========== 开始生成{target_name} ==========")
+        progress_callback(1, f"【输入信息】")
+        progress_callback(1, f"  ├─ 书名: {book_title or '未提供'}")
+        progress_callback(1, f"  ├─ 作者: {author_str or '未提供'}")
+        progress_callback(1, f"  ├─ 分类: {', '.join(categories) or '未提供'}")
+        progress_callback(1, f"  ├─ 封面路径: {cover_filename}")
+        progress_callback(1, f"  ├─ 封面尺寸: {front_orig.size[0]}x{front_orig.size[1]}px")
+        progress_callback(2, f"  ├─ 成书尺寸: {trim_size} ({page_w}x{page_h}px)")
+        if target == "spine":
+            progress_callback(2, f"  └─ 书脊宽度: {spine_width_mm}mm ({spine_px}px)")
+        else:
+            progress_callback(2, f"  └─ 简介: {(description[:50] + '...') if description and len(description) > 50 else (description or '未提供')}")
+
+
+    # ── 3. Claude 风格分析（V4.0 更新）──────────────────────────────────────
+
+    if progress_callback:
+        progress_callback(3, f"【第一步】正在分析封面风格（生成{target_name}）...")
+        progress_callback(4, f"  ├─ 封面预处理: 缩放到{cover.size[0]}x{cover.size[1]}px")
+        progress_callback(5, f"  └─ 正在调用Claude API分析...")
+
+    # 生成请求 ID 用于日志追踪
+    request_id = f"AI-{int(time.time() * 1000) % 1000000}"
+
+    # 调用 Claude 分析封面
+    analysis = _analyze_style_with_claude(
         front_img=cover,
         target=target,
         book_title=book_title,
         authors=authors,
         description=description,
         categories=categories,
+        request_id=request_id,
     )
 
-    # 构建 prompt（与本地测试脚本 build_outpaint_prompt 完全一致）
-    genre = ", ".join((categories or [])[:2])
-    style = style_desc or (
-        "seamless extension of book cover art, "
-        "same color palette and illustration style, "
-        "atmospheric background, professional book design"
-    )
+    # 提取分析结果
+    style_analysis = analysis.get("style_analysis", "")
+    ipadapter_weight = analysis.get("ipadapter_weight", 1.0)
+    recommended_steps = analysis.get("recommended_steps", 20)
+    token_usage = analysis.get("token_usage", {})
 
+    if progress_callback:
+        progress_callback(8, f"Claude分析完成: {style_analysis[:60]}...")
+        progress_callback(9, f"Token消耗: 输入{token_usage.get('input_tokens', 0)} + 输出{token_usage.get('output_tokens', 0)} = {token_usage.get('total_tokens', 0)}")
+
+    # 根据 target 选择对应的 prompt
     if target == "spine":
+        prompt = analysis.get("spine_prompt", "seamless narrow extension, natural continuation")
+        if progress_callback:
+            progress_callback(10, f"识别的书脊图案: {prompt}")
+        # 书脊 prompt 通常较短，补充一些细节
+        genre = ", ".join((categories or [])[:2])
         prompt = (
-            f"{style}. "
+            f"{prompt}. "
             f"Seamlessly extend the book cover edge to the left as a narrow spine strip. "
             f"{(genre + ' style, ') if genre else ''}"
             f"Exact same background color, texture and pattern as the cover left edge. "
             f"Simple vertical continuation, no new elements, seamless transition."
         )
-    else:
-        style_tags = _parse_janus_to_tags(style)
+    else:  # back
+        prompt = analysis.get("back_cover_prompt", "seamless extension, natural continuation, open space for text")
+        if progress_callback:
+            progress_callback(10, f"识别的封底图案: {prompt}")
+        # 保留 Claude 识别的具体图案和装饰元素，只补充技术指导
+        # 类似书脊的处理方式：保留内容描述 + 补充生成指导
         prompt = (
-            f"{style_tags}, "
-            f"seamless book cover background extension, "
-            f"open sky and landscape, no characters, no text, no logos, "
-            f"lower half plain and open for text, "
-            f"same art style and color temperature as reference image"
+            f"{prompt}, "
+            f"seamless extension of the book cover to the left, "
+            f"maintain exact same decorative patterns and visual elements from the cover, "
+            f"lower half open and plain for text overlay, "
+            f"no characters, no text, no logos"
         )
 
     if progress_callback:
-        progress_callback(10)
+        progress_callback(11, f"完整Prompt: {prompt[:80]}...")
+        progress_callback(12, f"IP-Adapter权重: {ipadapter_weight}, 生成步数: {recommended_steps}")
+
+    logger.info(f"[{request_id}] 使用 Prompt: {prompt[:100]}...")
+    logger.info(f"[{request_id}] IP-Adapter 权重: {ipadapter_weight}, 步数: {recommended_steps}")
+
+    # 使用 Claude 推荐的步数（如果合理）
+    if 10 <= recommended_steps <= 30:
+        steps = recommended_steps
+    else:
+        steps = 20  # 默认 20 步
+
+    if progress_callback:
+        # 提取Claude识别的关键图案（back_cover_prompt的前30个字符）
+        prompt_preview = analysis.get("back_cover_prompt" if target == "back" else "spine_prompt", "")[:50]
+        progress_callback(14, f"【第二步】风格分析完成，准备生成{target_name}...")
+        progress_callback(15, f"  ├─ 识别图案: {prompt_preview}...")
+        progress_callback(16, f"  ├─ IP-Adapter权重: {ipadapter_weight}")
+        progress_callback(17, f"  └─ 生成步数: {steps}")
 
     # ── 4. 画布构建 ──────────────────────────────────────────────────────────
     if target == "back":
@@ -709,6 +900,10 @@ def generate_ai_material(
         mask_b = mask_out.getvalue()
         phase_start, phase_end = 10, 90
         logger.info(f"[AI] 封底画布: {total_w}x{total_h}，crop策略，参考宽={ref_w}")
+        if progress_callback:
+            progress_callback(18, f"【第三步】构建封底画布: {total_w}x{total_h}px ({GENERATION_STRATEGY}策略)")
+            progress_callback(19, f"  ├─ 参考区域宽度: {ref_w}px")
+            progress_callback(20, f"  └─ 生成区域宽度: {page_w}px")
 
     else:  # spine
         # 书脊放大生成策略（与本地测试脚本一致）：
@@ -725,40 +920,55 @@ def generate_ai_material(
         logger.info(
             f"[AI] 书脊画布: {total_w}x{total_h}，生成宽={spine_px_gen}，真实宽={spine_px}"
         )
+        if progress_callback:
+            progress_callback(18, f"【第三步】构建书脊画布: {total_w}x{total_h}px")
+            progress_callback(19, f"  ├─ 生成宽度: {spine_px_gen}px (放大策略)")
+            progress_callback(20, f"  └─ 真实宽度: {spine_px}px (最终缩放)")
 
-    # ── 5. 上传画布和 Mask 到 ComfyUI ────────────────────────────────────────
+    # ── 5. 上传画布、Mask 和封面参考图到 ComfyUI ────────────────────────────
     if progress_callback:
-        progress_callback(12)
+        progress_callback(22, f"【第四步】正在上传素材到ComfyUI...")
 
     seed = int(time.time() * 1000) % (2**32)
     prefix = str(uuid.uuid4())[:8]
     canvas_fn = _upload_image(canvas_b, f"{prefix}_canvas.png")
     mask_fn = _upload_image(mask_b, f"{prefix}_mask.png")
 
-    if progress_callback:
-        progress_callback(15)
+    # 上传封面作为参考图（关键！用于 IP-Adapter）
+    cover_ref_buf = io.BytesIO()
+    cover.save(cover_ref_buf, "PNG")
+    cover_ref_fn = _upload_image(cover_ref_buf.getvalue(), f"{prefix}_reference.png")
 
-    # ── 6. 构建工作流并提交 ComfyUI（WebSocket 进度） ────────────────────────
-    workflow = _build_flux_workflow(
+    if progress_callback:
+        progress_callback(25, f"【第五步】提交{GENERATION_MODEL}生成任务...")
+        progress_callback(26, f"  ├─ 模型: {GENERATION_MODEL} + IP-Adapter")
+        progress_callback(27, f"  ├─ 随机种子: {seed}")
+        progress_callback(28, f"  └─ 开始生成{target_name}图片...")
+
+    # ── 6. 构建工作流并提交 ComfyUI（SDXL + IP-Adapter） ────────────────────────
+    workflow = _build_sdxl_ipadapter_workflow(
         canvas_fn=canvas_fn,
         mask_fn=mask_fn,
         prompt=prompt,
         seed=seed,
         steps=steps,
-        guidance=2.5,  # steps=8时低guidance更稳定
+        reference_image_fn=cover_ref_fn,  # 传入封面参考图
+        ipadapter_weight=ipadapter_weight,  # 使用 Claude 推荐的权重
     )
 
-    result_bytes = _run_workflow_with_progress(
-        workflow=workflow,
-        progress_callback=progress_callback,
-        phase_start=phase_start,
-        phase_end=phase_end,
-        timeout=600,
-    )
+    if progress_callback:
+        progress_callback(30, f"【生成中】{GENERATION_MODEL}正在绘制{target_name}，请稍候（约15-30秒）...")
+
+    result_bytes = _run_workflow_simple(workflow, timeout=600)
+
+    if progress_callback:
+        progress_callback(85, f"【第六步】{target_name}生成完成，正在后处理...")
+        progress_callback(86, f"  ├─ 裁切到目标尺寸")
+        progress_callback(87, f"  └─ 准备合成文字...")
 
     # ── 7. 裁切 + 缩回真实尺寸 + 文字合成 ──────────────────────────────────
     if progress_callback:
-        progress_callback(92)
+        progress_callback(92, f"【第七步】正在添加书名和简介文字...")
 
     result_img = _resize_to(result_bytes, total_w, total_h)
 
@@ -779,7 +989,7 @@ def generate_ai_material(
 
     # ── 8. 保存文件 ────────────────────────────────────────────────────────────
     if progress_callback:
-        progress_callback(96)
+        progress_callback(96, "正在保存文件...")
 
     target_dir = Path(print_root) / target
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -795,7 +1005,23 @@ def generate_ai_material(
 
     logger.info(f"[AI] 生成完成: {filename}")
 
-    if progress_callback:
-        progress_callback(100)
+    # 输出 Token 统计信息
+    if token_usage:
+        total = token_usage.get("total_tokens", 0)
+        input_t = token_usage.get("input_tokens", 0)
+        output_t = token_usage.get("output_tokens", 0)
+        logger.info(
+            f"[{request_id}] 本次 Claude API 消耗: {total} tokens "
+            f"(输入: {input_t}, 输出: {output_t})"
+        )
 
-    return [filename]
+    if progress_callback:
+        # 最后返回 Token 信息
+        token_msg = ""
+        if token_usage:
+            total = token_usage.get("total_tokens", 0)
+            token_msg = f" (消耗 {total} tokens)"
+        progress_callback(100, f"生成完成{token_msg}")
+
+    # 返回文件名和 Token 信息
+    return [filename], token_usage
