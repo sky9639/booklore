@@ -91,6 +91,8 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       if (!ws) return;
       this.compositeCache.clear();
       this.refreshComposite();
+      // 强制触发变更检测，确保历史预览图可以正常切换
+      this.cdr.detectChanges();
     });
 
     this.initWorkspace();
@@ -588,6 +590,8 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
         this.workspaceState.setWorkspace(data.ws);
         this.compositeCache.clear();
         this.refreshComposite();
+        // 强制触发变更检测，确保历史预览图可以正常切换
+        this.cdr.detectChanges();
       }
 
       if (data.total_tokens !== undefined) {
