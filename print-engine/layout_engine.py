@@ -53,10 +53,21 @@ def generate_layout(
     back_filename,
     spine_width_mm,
     trim_width_mm,
-    trim_height_mm
+    trim_height_mm,
+    book_name=None
 ):
+    # 生成文件名：使用书名或默认名称
+    if book_name:
+        # 清理书名中的非法字符
+        safe_name = "".join(c for c in book_name if c.isalnum() or c in (' ', '-', '_')).strip()
+        safe_name = safe_name.replace(' ', '_')
+        if not safe_name:
+            safe_name = "layout_print"
+        filename = f"{safe_name}_print.pdf"
+    else:
+        filename = "layout_print.pdf"
 
-    output_pdf = os.path.join(print_root, "layout_print.pdf")
+    output_pdf = os.path.join(print_root, filename)
     c = canvas.Canvas(output_pdf)
 
     cover_path = os.path.join(print_root, "cover", cover_filename)
@@ -110,4 +121,4 @@ def generate_layout(
 
     c.save()
 
-    return "layout_print.pdf"
+    return filename

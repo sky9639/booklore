@@ -252,11 +252,35 @@ public class PrintController {
             Path fullPath = book.getFullFilePath();
             if (fullPath == null) return ResponseEntity.notFound().build();
 
-            File file = fullPath
-                .getParent()
-                .resolve(".print")
-                .resolve("layout_print.pdf")
-                .toFile();
+            // 从 workspace.json 读取实际的 PDF 文件名
+            Path printDir = fullPath.getParent().resolve(".print");
+            Path workspaceFile = printDir.resolve("workspace.json");
+
+            File file = null;
+            String filename = "layout_print.pdf";
+
+            if (workspaceFile.toFile().exists()) {
+                try {
+                    String json = Files.readString(workspaceFile);
+                    com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                    com.fasterxml.jackson.databind.JsonNode ws = mapper.readTree(json);
+                    String pdfPath = ws.has("pdf_path") ? ws.get("pdf_path").asText() : null;
+
+                    if (pdfPath != null && !pdfPath.isEmpty()) {
+                        file = new File(pdfPath);
+                        filename = file.getName();
+                    }
+                } catch (Exception e) {
+                    // 读取失败，使用默认文件名
+                }
+            }
+
+            // 如果没有从 workspace 读取到，使用默认路径
+            if (file == null || !file.exists()) {
+                file = printDir.resolve("layout_print.pdf").toFile();
+                filename = "layout_print.pdf";
+            }
+
             if (!file.exists()) return ResponseEntity.notFound().build();
 
             InputStreamResource resource = new InputStreamResource(
@@ -265,7 +289,7 @@ public class PrintController {
             return ResponseEntity.ok()
                 .header(
                     HttpHeaders.CONTENT_DISPOSITION,
-                    "inline; filename=layout_print.pdf"
+                    "inline; filename=" + filename
                 )
                 .header(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "*")
                 .contentLength(file.length())
@@ -294,11 +318,35 @@ public class PrintController {
             Path fullPath = book.getFullFilePath();
             if (fullPath == null) return ResponseEntity.notFound().build();
 
-            File file = fullPath
-                .getParent()
-                .resolve(".print")
-                .resolve("layout_print.pdf")
-                .toFile();
+            // 从 workspace.json 读取实际的 PDF 文件名
+            Path printDir = fullPath.getParent().resolve(".print");
+            Path workspaceFile = printDir.resolve("workspace.json");
+
+            File file = null;
+            String filename = "layout_print.pdf";
+
+            if (workspaceFile.toFile().exists()) {
+                try {
+                    String json = Files.readString(workspaceFile);
+                    com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                    com.fasterxml.jackson.databind.JsonNode ws = mapper.readTree(json);
+                    String pdfPath = ws.has("pdf_path") ? ws.get("pdf_path").asText() : null;
+
+                    if (pdfPath != null && !pdfPath.isEmpty()) {
+                        file = new File(pdfPath);
+                        filename = file.getName();
+                    }
+                } catch (Exception e) {
+                    // 读取失败，使用默认文件名
+                }
+            }
+
+            // 如果没有从 workspace 读取到，使用默认路径
+            if (file == null || !file.exists()) {
+                file = printDir.resolve("layout_print.pdf").toFile();
+                filename = "layout_print.pdf";
+            }
+
             if (!file.exists()) return ResponseEntity.notFound().build();
 
             InputStreamResource resource = new InputStreamResource(
@@ -307,7 +355,7 @@ public class PrintController {
             return ResponseEntity.ok()
                 .header(
                     HttpHeaders.CONTENT_DISPOSITION,
-                    "attachment; filename=\"layout_print.pdf\""
+                    "attachment; filename=\"" + filename + "\""
                 )
                 .contentLength(file.length())
                 .contentType(MediaType.APPLICATION_PDF)

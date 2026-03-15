@@ -261,6 +261,7 @@ def generate(request: PreviewRequest):
         spine_width,
         trim_width_mm,
         trim_height_mm,
+        ws.get("book_name", None),
     )
 
     abs_pdf_path = os.path.join(print_root, pdf_filename)
