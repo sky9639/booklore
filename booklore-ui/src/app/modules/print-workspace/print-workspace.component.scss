@@ -996,7 +996,8 @@ Booklore Print Workspace
   height: calc(100vh - 130px);
   display: flex;
   flex-direction: column;
-  z-index: 10;
+  z-index: 1;
+  pointer-events: auto;
 }
 
 .ai-log-header {
