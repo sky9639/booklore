@@ -71,6 +71,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   resizing = false;
   resizeProgress = 0;
   resizeStage = '';
+  resizeLogs: string[] = [];
 
   // ── AI 统一生成状态 ──────────────────────────────────────────
   aiGenerating = false;
@@ -718,9 +719,18 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   onResizePdf(): void {
     if (this.resizing) return;
 
+    // 重置日志
+    this.resizeLogs = [];
+    this.addResizeLog('开始格式化流程...');
+
     // 弹出尺寸选择对话框
     const targetSize = this.showSizeSelector();
-    if (!targetSize) return;
+    if (!targetSize) {
+      this.addResizeLog('用户取消了尺寸选择');
+      return;
+    }
+
+    this.addResizeLog(`用户选择目标尺寸: ${targetSize}`);
 
     // 确认对话框
     const confirmed = confirm(
@@ -729,24 +739,33 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       `格式化过程可能需要几分钟，请耐心等待。`
     );
 
-    if (!confirmed) return;
+    if (!confirmed) {
+      this.addResizeLog('用户取消了格式化操作');
+      return;
+    }
 
     this.resizing = true;
     this.resizeProgress = 0;
     this.resizeStage = '准备中...';
+    this.addResizeLog('正在启动格式化任务...');
 
     // 启动格式化任务
     this.print.resizePdf(this.bookId, targetSize).subscribe({
       next: (result) => {
         if (!result.task_id) {
+          this.addResizeLog('❌ 启动格式化任务失败：未返回task_id');
           this.handleResizeError('启动格式化任务失败');
           return;
         }
+
+        this.addResizeLog(`✓ 任务已启动，task_id: ${result.task_id}`);
+        this.addResizeLog('正在连接进度流...');
 
         // 监听进度
         this.watchResizeProgress(result.task_id);
       },
       error: (err) => {
+        this.addResizeLog(`❌ 启动失败: ${err.error?.error || err.message || '未知错误'}`);
         this.handleResizeError(err.error?.error || '启动失败');
       }
     });
@@ -779,6 +798,8 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   private watchResizeProgress(taskId: string): void {
     const pythonBase = `${window.location.protocol}//${window.location.hostname}:5800`;
     const url = `${pythonBase}/pdf/resize/progress/${taskId}`;
+    this.addResizeLog(`连接SSE: ${url}`);
+
     const es = new EventSource(url);
 
     es.onmessage = (event: MessageEvent) => {
@@ -788,10 +809,20 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
         this.resizeProgress = data.progress || 0;
         this.resizeStage = data.stage || '';
 
+        // 记录进度日志
+        if (data.stage) {
+          this.addResizeLog(`[${data.progress}%] ${data.stage}`);
+        }
+
         if (data.status === 'done') {
           es.close();
           this.resizing = false;
           this.resizeProgress = 100;
+
+          this.addResizeLog('✓ 格式化完成！');
+          if (data.new_size) {
+            this.addResizeLog(`新尺寸: ${data.new_size.width_mm} × ${data.new_size.height_mm} mm`);
+          }
 
           alert('PDF格式化完成！');
 
@@ -801,12 +832,14 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
           }, 500);
         } else if (data.status === 'error') {
           es.close();
+          this.addResizeLog(`❌ 错误: ${data.error || '未知错误'}`);
           this.handleResizeError(data.error || '未知错误');
         }
 
         this.cdr.detectChanges();
       } catch (e) {
         es.close();
+        this.addResizeLog(`❌ 解析进度数据失败: ${e}`);
         this.handleResizeError('解析进度数据失败');
       }
     };
@@ -814,6 +847,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     es.onerror = () => {
       if (es.readyState === EventSource.CLOSED) {
         es.close();
+        this.addResizeLog('❌ SSE连接中断');
         this.handleResizeError('连接中断');
       }
     };
@@ -827,6 +861,15 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     this.resizeProgress = 0;
     this.resizeStage = '';
     alert(`格式化失败：${message}`);
+    this.cdr.detectChanges();
+  }
+
+  /**
+   * 添加格式化日志
+   */
+  private addResizeLog(message: string): void {
+    const timestamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    this.resizeLogs.push(`[${timestamp}] ${message}`);
     this.cdr.detectChanges();
   }
 

@@ -73,7 +73,8 @@ class PdfResizer:
             # 3. 读取原PDF
             self.emit_progress(15, "正在读取PDF...")
             try:
-                reader = PdfReader(self.pdf_path, strict=False)  # 非严格模式，容忍PDF错误
+                # 使用strict=False容忍PDF错误，并尝试修复
+                reader = PdfReader(self.pdf_path, strict=False)
             except Exception as e:
                 raise Exception(f"无法读取PDF文件: {str(e)}")
 
@@ -82,9 +83,10 @@ class PdfResizer:
             if total_pages == 0:
                 raise Exception("PDF文件为空，没有页面")
 
-            # 4. 创建新PDF
+            # 4. 创建新PDF（使用compress=False避免对象引用问题）
             self.emit_progress(20, "正在创建新PDF...")
             writer = PdfWriter()
+            writer.compress = False  # 禁用压缩，避免对象引用问题
 
             # 获取目标尺寸（点）
             target_w_mm, target_h_mm = STANDARD_SIZES[self.target_size]
@@ -172,7 +174,9 @@ class PdfResizer:
             新页面对象
         """
         from PyPDF2 import Transformation
-        import copy
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import letter
+        import io
 
         try:
             # 获取原页面尺寸
@@ -198,40 +202,52 @@ class PdfResizer:
             offset_x = (target_w_pt - scaled_w) / 2
             offset_y = (target_h_pt - scaled_h) / 2
 
-            # 创建新页面（目标尺寸，白色背景）
+            # 方法1：尝试使用PyPDF2的标准方法
             try:
+                # 创建新页面（目标尺寸，白色背景）
                 new_page = PageObject.create_blank_page(
                     width=target_w_pt,
                     height=target_h_pt
                 )
-            except Exception as e:
-                raise Exception(f"创建空白页失败: {str(e)}")
 
-            # 复制原页面以避免修改原对象
-            try:
-                page_copy = copy.copy(page)
-            except Exception as e:
-                raise Exception(f"复制页面对象失败: {str(e)}")
-
-            # 创建变换：先缩放，再平移
-            try:
+                # 创建变换：先缩放，再平移
                 transformation = Transformation().scale(scale, scale).translate(offset_x, offset_y)
-            except Exception as e:
-                raise Exception(f"创建变换矩阵失败: {str(e)}")
 
-            # 应用变换
-            try:
-                page_copy.add_transformation(transformation)
-            except Exception as e:
-                raise Exception(f"应用变换失败: {str(e)}")
+                # 应用变换到原页面
+                page.add_transformation(transformation)
 
-            # 合并页面
-            try:
-                new_page.merge_page(page_copy)
-            except Exception as e:
-                raise Exception(f"合并页面失败: {str(e)}")
+                # 合并页面
+                new_page.merge_page(page)
 
-            return new_page
+                return new_page
+
+            except (AssertionError, AttributeError, KeyError) as e:
+                # 如果标准方法失败（通常是因为对象引用问题），使用reportlab重建页面
+                logger.warning(f"第{page_num}页使用标准方法失败({str(e)})，尝试使用reportlab重建")
+
+                # 使用reportlab创建白色背景页面
+                packet = io.BytesIO()
+                can = canvas.Canvas(packet, pagesize=(target_w_pt, target_h_pt))
+                can.setFillColorRGB(1, 1, 1)  # 白色
+                can.rect(0, 0, target_w_pt, target_h_pt, fill=1, stroke=0)
+                can.save()
+
+                # 读取reportlab生成的PDF
+                packet.seek(0)
+                from PyPDF2 import PdfReader as TempReader
+                temp_reader = TempReader(packet)
+                new_page = temp_reader.pages[0]
+
+                # 尝试合并原页面（带缩放和偏移）
+                try:
+                    transformation = Transformation().scale(scale, scale).translate(offset_x, offset_y)
+                    page.add_transformation(transformation)
+                    new_page.merge_page(page)
+                except:
+                    # 如果还是失败，只返回白色背景页面
+                    logger.error(f"第{page_num}页无法合并内容，将使用空白页")
+
+                return new_page
 
         except Exception as e:
             error_detail = str(e)

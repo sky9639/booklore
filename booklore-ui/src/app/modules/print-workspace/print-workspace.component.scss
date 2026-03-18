@@ -385,6 +385,66 @@ Booklore Print Workspace
   text-align: center;
 }
 
+.resize-logs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.logs-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #8ea3bf;
+  font-weight: 600;
+
+  i {
+    font-size: 13px;
+  }
+}
+
+.logs-content {
+  max-height: 200px;
+  overflow-y: auto;
+  background: #0c1624;
+  border: 1px solid #1a2f4a;
+  border-radius: 6px;
+  padding: 8px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 11px;
+  line-height: 1.6;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: #0c1624;
+    border-radius: 3px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: #2c3e55;
+    border-radius: 3px;
+
+    &:hover {
+      background: #3d5270;
+    }
+  }
+}
+
+.log-line {
+  color: #c9d1d9;
+  padding: 2px 0;
+  word-break: break-all;
+
+  &:not(:last-child) {
+    border-bottom: 1px solid rgba(42, 60, 85, 0.3);
+  }
+}
+
 /* =========================================================
    STEP1 成书参数
 ========================================================= */
