@@ -57,6 +57,14 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   /** [V1.9] PDF 生成错误信息 */
   pdfError = "";
 
+  /** PDF尺寸信息 */
+  pdfSizeInfo = {
+    width: 0,
+    height: 0,
+    orientation: '未知',
+    matchedSize: null as 'A4' | 'A5' | 'B5' | null
+  };
+
   // ── AI 统一生成状态 ──────────────────────────────────────────
   aiGenerating = false;
   aiProgressText = "AI 生成书脊 & 封底";
@@ -91,6 +99,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       if (!ws) return;
       this.compositeCache.clear();
       this.refreshComposite();
+      this.updatePdfSizeInfo();
       // 强制触发变更检测，确保历史预览图可以正常切换
       this.cdr.detectChanges();
     });
@@ -636,5 +645,65 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   }
   goLibrary() {
     this.router.navigate(["/all-books"]);
+  }
+
+  /**
+   * 更新PDF尺寸信息
+   * 根据当前trim_size计算物理尺寸、方向和匹配的标准尺寸
+   */
+  private updatePdfSizeInfo(): void {
+    const ws = this.workspace;
+    if (!ws) {
+      this.pdfSizeInfo = {
+        width: 0,
+        height: 0,
+        orientation: '未知',
+        matchedSize: null
+      };
+      return;
+    }
+
+    // 获取页面尺寸（mm）
+    const width = this.preview.getPageWidth(ws as any);
+    const height = this.preview.getPageHeight(ws as any);
+
+    // 判断方向
+    const orientation = width > height ? '横向' : width < height ? '竖向' : '正方形';
+
+    // 匹配标准尺寸（容差2mm）
+    const matchedSize = this.matchStandardSize(width, height);
+
+    this.pdfSizeInfo = {
+      width: Math.round(width),
+      height: Math.round(height),
+      orientation,
+      matchedSize
+    };
+  }
+
+  /**
+   * 匹配标准尺寸
+   * @param width 宽度（mm）
+   * @param height 高度（mm）
+   * @returns 匹配的标准尺寸或null
+   */
+  private matchStandardSize(width: number, height: number): 'A4' | 'A5' | 'B5' | null {
+    const TOLERANCE = 2; // 容差2mm
+    const sizes: Record<'A4' | 'A5' | 'B5', [number, number]> = {
+      A4: [210, 297],
+      A5: [148, 210],
+      B5: [176, 250]
+    };
+
+    for (const [name, [w, h]] of Object.entries(sizes) as Array<['A4' | 'A5' | 'B5', [number, number]]>) {
+      // 考虑横向和竖向
+      if (
+        (Math.abs(width - w) <= TOLERANCE && Math.abs(height - h) <= TOLERANCE) ||
+        (Math.abs(width - h) <= TOLERANCE && Math.abs(height - w) <= TOLERANCE)
+      ) {
+        return name;
+      }
+    }
+    return null;
   }
 }

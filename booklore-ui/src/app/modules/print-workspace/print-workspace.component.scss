@@ -36,36 +36,54 @@ Booklore Print Workspace
   padding: 20px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #e6edf3;
+  overflow-x: hidden;
 }
 
 /* =========================================================
    主布局 Grid
 ========================================================= */
 .wrapper {
-  max-width: 1500px;
-  margin: 0 auto;
+  max-width: 100%;
+  margin: 0;
   display: grid;
-  grid-template-columns: 360px 1fr;
+  grid-template-columns: 280px 360px minmax(600px, 1fr) 420px;
   grid-template-rows: auto auto 1fr;
   gap: 20px;
-  min-height: calc(100vh - 80px);
+  min-height: calc(100vh - 40px);
   width: 100%;
+  box-sizing: border-box;
 }
 
 .workspace-header {
-  grid-column: 1 / span 2;
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+.pdf-size-info {
+  grid-column: 1;
+  grid-row: 2 / 4;
 }
 .print-params {
-  grid-column: 1;
+  grid-column: 2;
+  grid-row: 2;
 }
 .step2-wrapper {
-  grid-column: 2;
+  grid-column: 3;
+  grid-row: 2;
+  position: relative;
+  min-width: 0;
+}
+.ai-log-sidebar {
+  grid-column: 4;
+  grid-row: 2 / 4;
 }
 .manual {
-  grid-column: 1;
+  grid-column: 2;
+  grid-row: 3;
 }
 .step3 {
-  grid-column: 2;
+  grid-column: 3;
+  grid-row: 3;
+  min-width: 0;
 }
 
 /* =========================================================
@@ -154,7 +172,7 @@ Booklore Print Workspace
 .card {
   background: #111a2b;
   border-radius: 14px;
-  padding: 18px;
+  padding: 16px;
   border: 1px solid #1f2a3d;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
   display: flex;
@@ -165,7 +183,7 @@ Booklore Print Workspace
 .section-title {
   font-size: 15px;
   font-weight: 600;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 .section-content {
   flex: 1;
@@ -174,7 +192,109 @@ Booklore Print Workspace
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
+}
+
+/* =========================================================
+   PDF尺寸信息
+========================================================= */
+.pdf-size-info {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.size-display {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: #0c1624;
+  border-radius: 8px;
+  border: 1px solid #1a2f4a;
+}
+
+.size-icon {
+  font-size: 32px;
+  flex-shrink: 0;
+}
+
+.size-details {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.size-physical {
+  font-size: 18px;
+  font-weight: 700;
+  color: #e6edf3;
+  font-family: monospace;
+  letter-spacing: 0.5px;
+}
+
+.size-orientation {
+  font-size: 12px;
+  color: #8ea3bf;
+  font-weight: 500;
+}
+
+.size-standards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.standard-label {
+  font-size: 12px;
+  color: #8ea3bf;
+  font-weight: 500;
+}
+
+.standard-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.standard-btn {
+  flex: 1;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #2c3e55;
+  background: #0c1a2b;
+  color: #8ea3bf;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: default;
+  transition: all 0.2s;
+
+  &.active {
+    background: linear-gradient(135deg, #10b981, #059669);
+    border-color: #10b981;
+    color: white;
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.3);
+  }
+
+  &:not(.active) {
+    opacity: 0.5;
+  }
+}
+
+.size-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(251, 146, 60, 0.1);
+  border: 1px solid rgba(251, 146, 60, 0.3);
+  border-radius: 6px;
+  font-size: 12px;
+  color: #fb923c;
+
+  i {
+    font-size: 14px;
+  }
 }
 
 /* =========================================================
@@ -285,7 +405,7 @@ Booklore Print Workspace
 .material-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 24px;
+  gap: 16px;
   align-items: stretch;
 }
 
@@ -439,16 +559,16 @@ Booklore Print Workspace
   justify-content: center;
   background: #1a1f2b;
   border-radius: 10px;
-  padding: 24px 20px 16px;
+  padding: 20px 16px 12px;
   overflow: hidden;
-  min-height: 400px;
+  min-height: 300px;
 }
 
 .preview-stage {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  gap: 40px;
+  gap: 30px;
   width: 100%;
   flex: 1;
 }
@@ -610,7 +730,7 @@ Booklore Print Workspace
   border-radius: 4px;
   overflow: hidden;
   position: relative;
-  height: clamp(280px, 42vh, 440px);
+  height: clamp(240px, 35vh, 380px);
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -972,32 +1092,25 @@ Booklore Print Workspace
 
 .step2-wrapper {
   position: relative;
-  display: flex;
-  gap: 16px;
-  align-items: flex-start;
+  display: block;
+  min-width: 0;
 }
 
 .step2-wrapper .card.step2 {
-  flex: 0 0 auto;
   width: 100%;
-  max-width: none;
 }
 
 .ai-log-sidebar {
-  position: absolute;
-  right: -466px; /* 450px宽度 + 16px间距 */
-  top: 0;
-  width: 450px;
-  flex-shrink: 0;
   padding: 12px;
   background: rgba(30, 41, 59, 0.5);
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 8px;
-  height: calc(100vh - 130px);
   display: flex;
   flex-direction: column;
   z-index: 1;
   pointer-events: auto;
+  height: 100%;
+  overflow: hidden;
 }
 
 .ai-log-header {

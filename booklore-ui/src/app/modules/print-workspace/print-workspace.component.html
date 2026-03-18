@@ -15,6 +15,33 @@
     </div>
   </div>
 
+  <!-- ===================== PDF尺寸信息 ===================== -->
+  <div class="card pdf-size-info">
+    <div class="param-header">
+      <i class="pi pi-ruler-combined"></i>
+      <span>PDF尺寸</span>
+    </div>
+    <div class="size-display">
+      <div class="size-icon">📏</div>
+      <div class="size-details">
+        <div class="size-physical">{{ pdfSizeInfo.width }} × {{ pdfSizeInfo.height }} mm</div>
+        <div class="size-orientation">{{ pdfSizeInfo.orientation }}</div>
+      </div>
+    </div>
+    <div class="size-standards">
+      <div class="standard-label">标准尺寸</div>
+      <div class="standard-buttons">
+        <button class="standard-btn" [class.active]="pdfSizeInfo.matchedSize === 'A4'">A4</button>
+        <button class="standard-btn" [class.active]="pdfSizeInfo.matchedSize === 'A5'">A5</button>
+        <button class="standard-btn" [class.active]="pdfSizeInfo.matchedSize === 'B5'">B5</button>
+      </div>
+    </div>
+    <div class="size-warning" *ngIf="!pdfSizeInfo.matchedSize">
+      <i class="pi pi-exclamation-triangle"></i>
+      <span>非标准尺寸</span>
+    </div>
+  </div>
+
   <!-- ===================== STEP1 成书参数 ===================== -->
   <div class="card print-params">
     <div class="param-header">
@@ -165,30 +192,30 @@
       ></app-material-slot>
     </div>
     </div>
+  </div>
 
-    <!-- 右侧：AI生成日志（常驻显示） -->
-    <div class="ai-log-sidebar">
-      <div class="ai-log-header">
-        <span>📋 生成日志</span>
+  <!-- ===================== AI生成日志 ===================== -->
+  <div class="ai-log-sidebar">
+    <div class="ai-log-header">
+      <span>📋 生成日志</span>
 
-        <!-- AI 生成进度条（移到日志标题行右侧） -->
-        <div class="ai-progress-inline" *ngIf="aiGenerating || aiLastResult === 'success'">
-          <div class="ai-progress-bar-inline">
-            <div class="ai-progress-fill" [style.width.%]="aiProgress"></div>
-            <span class="ai-progress-percent">{{ aiProgress }}%</span>
-          </div>
+      <!-- AI 生成进度条（移到日志标题行右侧） -->
+      <div class="ai-progress-inline" *ngIf="aiGenerating || aiLastResult === 'success'">
+        <div class="ai-progress-bar-inline">
+          <div class="ai-progress-fill" [style.width.%]="aiProgress"></div>
+          <span class="ai-progress-percent">{{ aiProgress }}%</span>
         </div>
       </div>
-      <div class="ai-log-content" #aiLogContent>
-        <div class="ai-log-empty" *ngIf="aiLogMessages.length === 0">
-          <i class="pi pi-info-circle"></i>
-          <span>暂无日志，点击"AI 生成书脊 & 封底"开始生成</span>
-        </div>
-        <div class="ai-log-item" *ngFor="let log of aiLogMessages" [class.ai-log-highlight]="log.highlight">
-          <span class="ai-log-time">{{ log.time }}</span>
-          <span class="ai-log-percent">{{ log.percent }}%</span>
-          <span class="ai-log-message">{{ log.message }}</span>
-        </div>
+    </div>
+    <div class="ai-log-content" #aiLogContent>
+      <div class="ai-log-empty" *ngIf="aiLogMessages.length === 0">
+        <i class="pi pi-info-circle"></i>
+        <span>暂无日志，点击"AI 生成书脊 & 封底"开始生成</span>
+      </div>
+      <div class="ai-log-item" *ngFor="let log of aiLogMessages" [class.ai-log-highlight]="log.highlight">
+        <span class="ai-log-time">{{ log.time }}</span>
+        <span class="ai-log-percent">{{ log.percent }}%</span>
+        <span class="ai-log-message">{{ log.message }}</span>
       </div>
     </div>
   </div>
