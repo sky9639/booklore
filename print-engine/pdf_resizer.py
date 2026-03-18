@@ -103,12 +103,15 @@ class PdfResizer:
 
                 try:
                     # 处理单页
-                    new_page = self._process_page(page, target_w_pt, target_h_pt)
+                    new_page = self._process_page(page, target_w_pt, target_h_pt, i + 1)
                     writer.add_page(new_page)
                 except Exception as e:
-                    error_msg = f"第{i+1}页处理失败: {str(e)}"
+                    # 获取详细的错误堆栈
+                    import traceback
+                    error_trace = traceback.format_exc()
+                    error_msg = f"第{i+1}页处理失败: {str(e)}\n详细信息: {error_trace}"
                     logger.error(error_msg)
-                    raise Exception(error_msg)
+                    raise Exception(f"第{i+1}页处理失败: {str(e)}")
 
             # 6. 写入临时文件
             self.emit_progress(92, "正在保存PDF...")
@@ -155,7 +158,7 @@ class PdfResizer:
                 "error": error_detail
             }
 
-    def _process_page(self, page, target_w_pt: float, target_h_pt: float):
+    def _process_page(self, page, target_w_pt: float, target_h_pt: float, page_num: int = 0):
         """
         处理单个页面：缩放并居中，四周加白边
 
@@ -163,6 +166,7 @@ class PdfResizer:
             page: 原页面对象
             target_w_pt: 目标宽度（点）
             target_h_pt: 目标高度（点）
+            page_num: 页码（用于错误提示）
 
         Returns:
             新页面对象
@@ -172,8 +176,14 @@ class PdfResizer:
 
         try:
             # 获取原页面尺寸
-            orig_w = float(page.mediabox.width)
-            orig_h = float(page.mediabox.height)
+            try:
+                orig_w = float(page.mediabox.width)
+                orig_h = float(page.mediabox.height)
+            except Exception as e:
+                raise Exception(f"无法读取页面尺寸: {str(e)}")
+
+            if orig_w <= 0 or orig_h <= 0:
+                raise Exception(f"页面尺寸无效: {orig_w}x{orig_h}")
 
             # 计算缩放比例（保持宽高比，不裁剪）
             scale_w = target_w_pt / orig_w
@@ -189,28 +199,45 @@ class PdfResizer:
             offset_y = (target_h_pt - scaled_h) / 2
 
             # 创建新页面（目标尺寸，白色背景）
-            new_page = PageObject.create_blank_page(
-                width=target_w_pt,
-                height=target_h_pt
-            )
+            try:
+                new_page = PageObject.create_blank_page(
+                    width=target_w_pt,
+                    height=target_h_pt
+                )
+            except Exception as e:
+                raise Exception(f"创建空白页失败: {str(e)}")
 
             # 复制原页面以避免修改原对象
-            page_copy = copy.copy(page)
+            try:
+                page_copy = copy.copy(page)
+            except Exception as e:
+                raise Exception(f"复制页面对象失败: {str(e)}")
 
             # 创建变换：先缩放，再平移
-            transformation = Transformation().scale(scale, scale).translate(offset_x, offset_y)
+            try:
+                transformation = Transformation().scale(scale, scale).translate(offset_x, offset_y)
+            except Exception as e:
+                raise Exception(f"创建变换矩阵失败: {str(e)}")
 
             # 应用变换
-            page_copy.add_transformation(transformation)
+            try:
+                page_copy.add_transformation(transformation)
+            except Exception as e:
+                raise Exception(f"应用变换失败: {str(e)}")
 
             # 合并页面
-            new_page.merge_page(page_copy)
+            try:
+                new_page.merge_page(page_copy)
+            except Exception as e:
+                raise Exception(f"合并页面失败: {str(e)}")
 
             return new_page
 
         except Exception as e:
-            logger.error(f"页面处理失败: {str(e)}")
-            raise Exception(f"页面缩放失败: {str(e)}")
+            error_detail = str(e)
+            logger.error(f"第{page_num}页处理失败: {error_detail}")
+            # 重新抛出异常，保留详细信息
+            raise
 
     def _backup_file(self) -> str:
         """
