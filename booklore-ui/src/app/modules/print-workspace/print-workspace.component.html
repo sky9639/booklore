@@ -77,15 +77,9 @@
           <div class="progress-text">{{ resizeProgress }}% - {{ resizeStage }}</div>
         </div>
 
-        <!-- 格式化日志 -->
+        <!-- 精简日志 -->
         <div class="resize-logs" *ngIf="resizeLogs.length > 0">
-          <div class="logs-header">
-            <i class="pi pi-list"></i>
-            <span>格式化日志</span>
-          </div>
-          <div class="logs-content">
-            <div class="log-line" *ngFor="let log of resizeLogs">{{ log }}</div>
-          </div>
+          <div class="log-line" *ngFor="let log of resizeLogs">{{ log }}</div>
         </div>
       </div>
     </ng-container>

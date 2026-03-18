@@ -175,8 +175,8 @@ class PdfResizer:
         """
         from PyPDF2 import Transformation
         from reportlab.pdfgen import canvas
-        from reportlab.lib.pagesizes import letter
         import io
+        import PyMuPDF as fitz
 
         try:
             # 获取原页面尺寸
@@ -202,52 +202,41 @@ class PdfResizer:
             offset_x = (target_w_pt - scaled_w) / 2
             offset_y = (target_h_pt - scaled_h) / 2
 
-            # 方法1：尝试使用PyPDF2的标准方法
-            try:
-                # 创建新页面（目标尺寸，白色背景）
-                new_page = PageObject.create_blank_page(
-                    width=target_w_pt,
-                    height=target_h_pt
-                )
+            # 使用PyMuPDF重建页面（避免PyPDF2的对象引用问题）
+            # 1. 将当前页面渲染为图像
+            temp_pdf = io.BytesIO()
+            temp_writer = PdfWriter()
+            temp_writer.add_page(page)
+            temp_writer.write(temp_pdf)
+            temp_pdf.seek(0)
 
-                # 创建变换：先缩放，再平移
-                transformation = Transformation().scale(scale, scale).translate(offset_x, offset_y)
+            # 2. 使用PyMuPDF读取并渲染
+            doc = fitz.open(stream=temp_pdf, filetype="pdf")
+            pix = doc[0].get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            img_data = pix.tobytes("png")
+            doc.close()
 
-                # 应用变换到原页面
-                page.add_transformation(transformation)
+            # 3. 使用reportlab创建新页面
+            packet = io.BytesIO()
+            can = canvas.Canvas(packet, pagesize=(target_w_pt, target_h_pt))
 
-                # 合并页面
-                new_page.merge_page(page)
+            # 白色背景
+            can.setFillColorRGB(1, 1, 1)
+            can.rect(0, 0, target_w_pt, target_h_pt, fill=1, stroke=0)
 
-                return new_page
+            # 绘制缩放后的页面图像（居中）
+            from reportlab.lib.utils import ImageReader
+            img_reader = ImageReader(io.BytesIO(img_data))
+            can.drawImage(img_reader, offset_x, offset_y, width=scaled_w, height=scaled_h)
+            can.save()
 
-            except (AssertionError, AttributeError, KeyError) as e:
-                # 如果标准方法失败（通常是因为对象引用问题），使用reportlab重建页面
-                logger.warning(f"第{page_num}页使用标准方法失败({str(e)})，尝试使用reportlab重建")
+            # 4. 读取生成的PDF页面
+            packet.seek(0)
+            from PyPDF2 import PdfReader as TempReader
+            temp_reader = TempReader(packet)
+            new_page = temp_reader.pages[0]
 
-                # 使用reportlab创建白色背景页面
-                packet = io.BytesIO()
-                can = canvas.Canvas(packet, pagesize=(target_w_pt, target_h_pt))
-                can.setFillColorRGB(1, 1, 1)  # 白色
-                can.rect(0, 0, target_w_pt, target_h_pt, fill=1, stroke=0)
-                can.save()
-
-                # 读取reportlab生成的PDF
-                packet.seek(0)
-                from PyPDF2 import PdfReader as TempReader
-                temp_reader = TempReader(packet)
-                new_page = temp_reader.pages[0]
-
-                # 尝试合并原页面（带缩放和偏移）
-                try:
-                    transformation = Transformation().scale(scale, scale).translate(offset_x, offset_y)
-                    page.add_transformation(transformation)
-                    new_page.merge_page(page)
-                except:
-                    # 如果还是失败，只返回白色背景页面
-                    logger.error(f"第{page_num}页无法合并内容，将使用空白页")
-
-                return new_page
+            return new_page
 
         except Exception as e:
             error_detail = str(e)

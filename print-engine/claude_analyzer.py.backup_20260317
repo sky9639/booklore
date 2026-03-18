@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+"""
+claude_analyzer.py - Claude API 封面风格分析模块
+版本: V2.0 (从 E:\AI\booklore_AI_Service 迁移)
+
+功能:
+- 使用 Claude Sonnet 4.6 分析封面风格
+- 生成封底和书脊的 Prompt
+- 推荐 IP-Adapter 权重和生成步数
+- 支持缓存机制减少 API 调用
+
+优化:
+- 图片自动缩放到 800px 降低 Token 消耗
+- 精简 Prompt 文本
+- 限制输出长度到 512 tokens
+"""
+
+import base64
+import hashlib
+import io
+import json
+import logging
+import os
+import time
+from pathlib import Path
+from typing import Dict, Optional
+
+import anthropic
+from PIL import Image
+
+logger = logging.getLogger(__name__)
+
+
+class ClaudeAnalyzer:
+    """Claude API 封面分析器"""
+
+    def __init__(
+        self,
+        api_key: str,
+        api_url: str = "https://api.anthropic.com",
+        model: str = "claude-sonnet-4-6",
+        cache_dir: Optional[str] = None,
+        cache_ttl: int = 3600,
+    ):
+        self.api_key = api_key
+        self.api_url = api_url
+        self.model = model
+        self.cache_dir = Path(cache_dir) if cache_dir else None
+        self.cache_ttl = cache_ttl
+
+        if self.cache_dir:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"[Claude] 缓存已启用: {self.cache_dir} (TTL: {cache_ttl}s)")
+
+        self.client = anthropic.Anthropic(api_key=api_key, base_url=api_url)
+
+    def _generate_cache_key(self, cover_bytes: bytes, book_info: Dict) -> str:
+        """生成缓存键"""
+        img_hash = hashlib.md5(cover_bytes).hexdigest()
+        key_data = {
+            "image_hash": img_hash,
+            "title": book_info.get("title", ""),
+            "categories": sorted(book_info.get("categories", [])),
+        }
+        key_str = json.dumps(key_data, sort_keys=True)
+        return hashlib.md5(key_str.encode()).hexdigest()
+
+    def _get_cache(self, cache_key: str) -> Optional[Dict]:
+        """从缓存读取"""
+        if not self.cache_dir:
+            return None
+
+        cache_file = self.cache_dir / f"{cache_key}.json"
+        if not cache_file.exists():
+            return None
+
+        try:
+            data = json.loads(cache_file.read_text(encoding="utf-8"))
+            if time.time() - data.get("timestamp", 0) > self.cache_ttl:
+                cache_file.unlink()
+                return None
+            logger.info(f"[Claude] 缓存命中: {cache_key[:8]}")
+            return data.get("result")
+        except Exception as e:
+            logger.warning(f"[Claude] 缓存读取失败: {e}")
+            return None
+
+    def _set_cache(self, cache_key: str, result: Dict):
+        """写入缓存"""
+        if not self.cache_dir:
+            return
+
+        try:
+            cache_file = self.cache_dir / f"{cache_key}.json"
+            data = {"timestamp": time.time(), "result": result}
+            cache_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"[Claude] 缓存写入失败: {e}")
+
+    def analyze_cover(
+        self, cover_image_bytes: bytes, book_info: Dict, request_id: str = ""
+    ) -> Dict:
+        """
+        分析封面并生成 Prompt
+
+        Args:
+            cover_image_bytes: 封面图片字节
+            book_info: 书籍信息 {"title": str, "categories": list, ...}
+            request_id: 请求 ID (用于日志追踪)
+
+        Returns:
+            {
+                "style_analysis": str,
+                "back_cover_prompt": str,
+                "spine_prompt": str,
+                "ipadapter_weight": float,
+                "recommended_steps": int
+            }
+        """
+        # 缓存已禁用 - 每次都重新分析以获得不同效果
+        # cache_key = self._generate_cache_key(cover_image_bytes, book_info)
+        # cached = self._get_cache(cache_key)
+        # if cached:
+        #     logger.info(f"[{request_id}] 使用缓存的分析结果")
+        #     return cached
+
+        try:
+            # 图片预处理: 缩放到 800px 降低 Token 消耗
+            img = Image.open(io.BytesIO(cover_image_bytes))
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+
+            max_size = 800
+            if max(img.size) > max_size:
+                ratio = max_size / max(img.size)
+                new_size = (int(img.width * ratio), int(img.height * ratio))
+                img = img.resize(new_size, Image.LANCZOS)
+
+            # 转换为 JPEG 压缩
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=85)
+            optimized_bytes = buf.getvalue()
+            cover_b64 = base64.b64encode(optimized_bytes).decode("utf-8")
+
+            logger.info(
+                f"[{request_id}] 图片优化: {len(cover_image_bytes)/1024:.1f}KB -> {len(optimized_bytes)/1024:.1f}KB"
+            )
+
+            # 精简 Prompt
+            title = book_info.get("title", "Unknown")
+            categories = ", ".join(book_info.get("categories", []))
+
+            prompt_text = f"""Analyze cover image for back cover & spine generation.
+
+Book: {title} | Type: {categories}
+
+Requirements:
+1. Observe: art style, colors, visual elements, patterns, textures, decorative details
+2. Back cover prompt: Describe SPECIFIC visual patterns you see (e.g., "red coral scalloped wave pattern", "golden floral border", "geometric triangles"). Be concrete, not generic.
+3. Spine prompt: narrow extension, seamless edge
+4. IP-Adapter weight: always use 1.0 for best style matching
+5. IMPORTANT: Describe the ACTUAL decorative elements visible on the cover (patterns, textures, shapes, ornaments), not generic terms like "decorative elements"
+
+Output JSON only:
+{{
+  "style_analysis": "brief style description",
+  "back_cover_prompt": "specific pattern description (10-15 words, describe actual visual elements)",
+  "spine_prompt": "short English phrase",
+  "ipadapter_weight": 1.0,
+  "recommended_steps": 20
+}}"""
+
+            start_time = time.time()
+            message = self.client.messages.create(
+                model=self.model,
+                max_tokens=512,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/jpeg",
+                                    "data": cover_b64,
+                                },
+                            },
+                            {"type": "text", "text": prompt_text},
+                        ],
+                    }
+                ],
+            )
+
+            elapsed = time.time() - start_time
+            usage = message.usage
+            logger.info(
+                f"[{request_id}] Claude API: {elapsed:.2f}s | "
+                f"Input: {usage.input_tokens} tokens | "
+                f"Output: {usage.output_tokens} tokens"
+            )
+
+            # 解析 JSON
+            response_text = message.content[0].text.strip()
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_text:
+                response_text = response_text.split("```")[1].split("```")[0].strip()
+
+            result = json.loads(response_text)
+
+            # 添加 Token 统计信息到结果中
+            result["token_usage"] = {
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "total_tokens": usage.input_tokens + usage.output_tokens,
+            }
+
+            logger.info(
+                f"[{request_id}] 风格分析: {result.get('style_analysis', '')[:80]}..."
+            )
+            logger.info(
+                f"[{request_id}] IP-Adapter 权重: {result.get('ipadapter_weight', 0.85)}"
+            )
+            logger.info(
+                f"[{request_id}] Token 消耗: {result['token_usage']['total_tokens']} "
+                f"(输入: {result['token_usage']['input_tokens']}, "
+                f"输出: {result['token_usage']['output_tokens']})"
+            )
+
+            # 缓存已禁用
+            # self._set_cache(cache_key, result)
+
+            return result
+
+        except json.JSONDecodeError as e:
+            logger.error(f"[{request_id}] JSON 解析失败: {e}")
+            return self._get_default_analysis()
+        except Exception as e:
+            logger.error(f"[{request_id}] Claude API 错误: {e}", exc_info=True)
+            return self._get_default_analysis()
+
+    def _get_default_analysis(self) -> Dict:
+        """返回默认分析结果"""
+        return {
+            "style_analysis": "Unable to analyze, using default settings",
+            "back_cover_prompt": "seamless extension, natural continuation, open space for text, decorative elements",
+            "spine_prompt": "seamless narrow extension, natural continuation",
+            "ipadapter_weight": 1.0,  # 最大权重，完美复制封面风格
+            "recommended_steps": 20,
+        }

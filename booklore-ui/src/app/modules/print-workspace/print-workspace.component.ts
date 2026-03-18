@@ -721,16 +721,12 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
 
     // 重置日志
     this.resizeLogs = [];
-    this.addResizeLog('开始格式化流程...');
 
     // 弹出尺寸选择对话框
     const targetSize = this.showSizeSelector();
     if (!targetSize) {
-      this.addResizeLog('用户取消了尺寸选择');
       return;
     }
-
-    this.addResizeLog(`用户选择目标尺寸: ${targetSize}`);
 
     // 确认对话框
     const confirmed = confirm(
@@ -740,32 +736,30 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     );
 
     if (!confirmed) {
-      this.addResizeLog('用户取消了格式化操作');
       return;
     }
 
     this.resizing = true;
     this.resizeProgress = 0;
     this.resizeStage = '准备中...';
-    this.addResizeLog('正在启动格式化任务...');
+    this.addResizeLog(`启动 ${targetSize} 格式化...`);
 
     // 启动格式化任务
     this.print.resizePdf(this.bookId, targetSize).subscribe({
       next: (result) => {
         if (!result.task_id) {
-          this.addResizeLog('❌ 启动格式化任务失败：未返回task_id');
+          this.addResizeLog('❌ 启动失败');
           this.handleResizeError('启动格式化任务失败');
           return;
         }
 
-        this.addResizeLog(`✓ 任务已启动，task_id: ${result.task_id}`);
-        this.addResizeLog('正在连接进度流...');
+        this.addResizeLog(`✓ 任务ID: ${result.task_id.substring(0, 8)}...`);
 
         // 监听进度
         this.watchResizeProgress(result.task_id);
       },
       error: (err) => {
-        this.addResizeLog(`❌ 启动失败: ${err.error?.error || err.message || '未知错误'}`);
+        this.addResizeLog(`❌ ${err.error?.error || '启动失败'}`);
         this.handleResizeError(err.error?.error || '启动失败');
       }
     });
@@ -798,7 +792,6 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   private watchResizeProgress(taskId: string): void {
     const pythonBase = `${window.location.protocol}//${window.location.hostname}:5800`;
     const url = `${pythonBase}/pdf/resize/progress/${taskId}`;
-    this.addResizeLog(`连接SSE: ${url}`);
 
     const es = new EventSource(url);
 
@@ -809,9 +802,9 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
         this.resizeProgress = data.progress || 0;
         this.resizeStage = data.stage || '';
 
-        // 记录进度日志
-        if (data.stage) {
-          this.addResizeLog(`[${data.progress}%] ${data.stage}`);
+        // 只记录关键进度节点
+        if (data.progress === 10 || data.progress === 50 || data.progress === 90) {
+          this.addResizeLog(`${data.stage}`);
         }
 
         if (data.status === 'done') {
@@ -819,9 +812,9 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
           this.resizing = false;
           this.resizeProgress = 100;
 
-          this.addResizeLog('✓ 格式化完成！');
+          this.addResizeLog('✓ 完成');
           if (data.new_size) {
-            this.addResizeLog(`新尺寸: ${data.new_size.width_mm} × ${data.new_size.height_mm} mm`);
+            this.addResizeLog(`新尺寸: ${data.new_size.width_mm}×${data.new_size.height_mm}mm`);
           }
 
           alert('PDF格式化完成！');
@@ -832,14 +825,17 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
           }, 500);
         } else if (data.status === 'error') {
           es.close();
-          this.addResizeLog(`❌ 错误: ${data.error || '未知错误'}`);
-          this.handleResizeError(data.error || '未知错误');
+          const errorMsg = data.error || '未知错误';
+          // 提取关键错误信息
+          const shortError = errorMsg.includes('第') ? errorMsg.split('详细信息')[0].trim() : errorMsg;
+          this.addResizeLog(`❌ ${shortError}`);
+          this.handleResizeError(errorMsg);
         }
 
         this.cdr.detectChanges();
       } catch (e) {
         es.close();
-        this.addResizeLog(`❌ 解析进度数据失败: ${e}`);
+        this.addResizeLog(`❌ 数据解析失败`);
         this.handleResizeError('解析进度数据失败');
       }
     };
@@ -847,7 +843,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     es.onerror = () => {
       if (es.readyState === EventSource.CLOSED) {
         es.close();
-        this.addResizeLog('❌ SSE连接中断');
+        this.addResizeLog('❌ 连接中断');
         this.handleResizeError('连接中断');
       }
     };
@@ -868,8 +864,12 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
    * 添加格式化日志
    */
   private addResizeLog(message: string): void {
-    const timestamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-    this.resizeLogs.push(`[${timestamp}] ${message}`);
+    const timestamp = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    this.resizeLogs.push(`${timestamp} ${message}`);
+    // 限制日志数量，避免过长
+    if (this.resizeLogs.length > 10) {
+      this.resizeLogs.shift();
+    }
     this.cdr.detectChanges();
   }
 

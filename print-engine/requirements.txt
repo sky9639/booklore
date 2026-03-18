@@ -10,3 +10,4 @@ python-dotenv
 websocket-client
 numpy
 anthropic
+PyPDF2

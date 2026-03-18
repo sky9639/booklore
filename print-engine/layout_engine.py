@@ -30,11 +30,21 @@ def generate_preview_layout(
 
     img = Image.new("RGB", (width_px, height_px), "white")
 
-    cover = Image.open(os.path.join(print_root, "cover", cover_filename)).resize(
+    # 检查文件是否存在，避免空图
+    cover_path = os.path.join(print_root, "cover", cover_filename) if cover_filename else None
+    spine_path = os.path.join(print_root, "spine", spine_filename) if spine_filename else None
+
+    if not cover_path or not os.path.exists(cover_path):
+        raise FileNotFoundError(f"Cover file not found: {cover_filename}")
+
+    if not spine_path or not os.path.exists(spine_path):
+        raise FileNotFoundError(f"Spine file not found: {spine_filename}")
+
+    cover = Image.open(cover_path).resize(
         (mm_to_px(trim_width_mm), height_px)
     )
 
-    spine = Image.open(os.path.join(print_root, "spine", spine_filename)).resize(
+    spine = Image.open(spine_path).resize(
         (mm_to_px(spine_width_mm), height_px)
     )
 
@@ -73,6 +83,14 @@ def generate_layout(
     cover_path = os.path.join(print_root, "cover", cover_filename)
     spine_path = os.path.join(print_root, "spine", spine_filename)
     back_path = os.path.join(print_root, "back", back_filename)
+
+    # 检查文件是否存在
+    if not os.path.exists(cover_path):
+        raise FileNotFoundError(f"Cover file not found: {cover_filename}")
+    if not os.path.exists(spine_path):
+        raise FileNotFoundError(f"Spine file not found: {spine_filename}")
+    if not os.path.exists(back_path):
+        raise FileNotFoundError(f"Back file not found: {back_filename}")
 
     # A5 / B5 → 2页
     if trim_width_mm in [148, 176]:

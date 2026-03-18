@@ -149,21 +149,19 @@ def _analyze_style_with_claude(
 
     返回:
         {
-            "style_analysis": str,
-            "back_cover_prompt": str,
-            "spine_prompt": str,
-            "ipadapter_weight": float,
-            "recommended_steps": int
+            "style_prompt": str,
+            "negative_prompt": str,
+            "analysis": str,
+            "token_usage": dict
         }
     """
     if not _claude_analyzer:
         logger.warning(f"[{request_id}] Claude 未配置，使用默认 Prompt")
         return {
-            "style_analysis": "Claude API not configured",
-            "back_cover_prompt": "seamless extension, natural continuation, open space for text, decorative elements",
-            "spine_prompt": "seamless narrow extension, natural continuation",
-            "ipadapter_weight": 1.0,
-            "recommended_steps": 20,
+            "style_prompt": "seamless extension, natural continuation, open space for text, decorative elements",
+            "negative_prompt": "blurry, low quality, distorted, text, watermark, signature, ugly, deformed, noisy, artifacts, jpeg artifacts, oversaturated, undersaturated",
+            "analysis": "Claude API not configured",
+            "token_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         }
 
     try:
@@ -178,23 +176,23 @@ def _analyze_style_with_claude(
             "authors": authors,
             "description": description,
             "categories": categories,
+            "target": target,  # 添加 target 参数
         }
 
         # 调用 Claude 分析
-        result = _claude_analyzer.analyze_cover(image_bytes, book_info, request_id)
+        result = _claude_analyzer.analyze_cover(image_bytes, book_info, request_id, target=target)
 
-        logger.info(f"[{request_id}] Claude 分析完成: {result.get('style_analysis', '')[:80]}...")
+        logger.info(f"[{request_id}] Claude 分析完成: {result.get('analysis', '')[:80]}...")
 
         return result
 
     except Exception as e:
         logger.error(f"[{request_id}] Claude 分析失败: {e}", exc_info=True)
         return {
-            "style_analysis": f"Analysis failed: {e}",
-            "back_cover_prompt": "seamless extension, natural continuation, open space for text, decorative elements",
-            "spine_prompt": "seamless narrow extension, natural continuation",
-            "ipadapter_weight": 1.0,
-            "recommended_steps": 20,
+            "style_prompt": "seamless extension, natural continuation, open space for text, decorative elements",
+            "negative_prompt": "blurry, low quality, distorted, text, watermark, signature, ugly, deformed, noisy, artifacts, jpeg artifacts, oversaturated, undersaturated",
+            "analysis": f"Analysis failed: {e}",
+            "token_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         }
 
 
@@ -240,10 +238,11 @@ def _build_sdxl_ipadapter_workflow(
     canvas_fn: str,
     mask_fn: str,
     prompt: str,
+    negative_prompt: str,
     seed: int,
-    steps: int = 20,
+    steps: int = 30,
     reference_image_fn: str = None,
-    ipadapter_weight: float = 1.0,
+    ipadapter_weight: float = 1.05,
 ) -> dict:
     """
     构建 SDXL + IP-Adapter 工作流（完全复用本地测试逻辑）
@@ -252,10 +251,11 @@ def _build_sdxl_ipadapter_workflow(
         canvas_fn: 画布图片文件名
         mask_fn: 遮罩图片文件名
         prompt: 生成 Prompt
+        negative_prompt: 负面 Prompt
         seed: 随机种子
-        steps: 生成步数
+        steps: 生成步数（优化：30）
         reference_image_fn: 参考图片文件名（封面原图，用于 IP-Adapter）
-        ipadapter_weight: IP-Adapter 权重 (0.7-1.5，推荐 1.0)
+        ipadapter_weight: IP-Adapter 权重（优化：1.05）
     """
     workflow = {
         "1": {
@@ -277,7 +277,7 @@ def _build_sdxl_ipadapter_workflow(
                 "pixels": ["6", 0],
                 "vae": ["2", 0],
                 "mask": ["8", 0],
-                "grow_mask_by": 6,  # SDXL 需要扩展边缘
+                "grow_mask_by": 8,  # SDXL 需要扩展边缘（优化：6→8，更平滑过渡）
             },
         },
         "10": {
@@ -286,7 +286,7 @@ def _build_sdxl_ipadapter_workflow(
         },
         "11": {
             "class_type": "CLIPTextEncode",
-            "inputs": {"clip": ["1", 1], "text": "blurry, low quality, distorted, text, watermark, signature"},
+            "inputs": {"clip": ["1", 1], "text": negative_prompt},  # 使用 Claude 返回的 negative_prompt
         },
     }
 
@@ -303,7 +303,7 @@ def _build_sdxl_ipadapter_workflow(
                 "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
                 "model": ["1", 0],
                 "image": ["16", 0],
-                "weight": ipadapter_weight,
+                "weight": ipadapter_weight,  # 优化：1.05（略微增强风格一致性）
                 "weight_type": "style transfer",
                 "start_at": 0.0,
                 "end_at": 1.0,
@@ -322,9 +322,9 @@ def _build_sdxl_ipadapter_workflow(
             "negative": ["11", 0],
             "latent_image": ["9", 0],
             "seed": seed,
-            "steps": steps,
-            "cfg": 7.0,
-            "sampler_name": "dpmpp_2m",
+            "steps": steps,  # 优化：30步（极致质量）
+            "cfg": 7.5,  # 优化：7.0→7.5（提升prompt遵循度）
+            "sampler_name": "dpmpp_2m_sde",  # 优化：dpmpp_2m→dpmpp_2m_sde（高质量采样器）
             "scheduler": "karras",
             "denoise": 1.0,
         },
@@ -551,6 +551,167 @@ def _resize_to(img_bytes: bytes, w: int, h: int) -> Image.Image:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 文字风格解析工具
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _parse_color(color_desc: str) -> tuple:
+    """
+    解析Claude返回的颜色描述为RGB值
+
+    Args:
+        color_desc: 颜色描述（如"white", "golden yellow", "light blue"）
+
+    Returns:
+        RGB元组 (r, g, b)
+    """
+    if not color_desc or color_desc == "null":
+        return None
+
+    # 颜色映射表
+    COLOR_MAP = {
+        "white": (255, 255, 255),
+        "black": (0, 0, 0),
+        "golden": (255, 215, 0),
+        "golden yellow": (255, 225, 130),
+        "warm gold": (255, 200, 80),
+        "gold": (255, 215, 0),
+        "red": (220, 50, 50),
+        "bright red": (255, 50, 50),
+        "dark red": (180, 30, 30),
+        "blue": (50, 120, 220),
+        "light blue": (150, 200, 255),
+        "dark blue": (30, 60, 120),
+        "sky blue": (135, 206, 235),
+        "green": (50, 180, 80),
+        "light green": (150, 220, 150),
+        "dark green": (30, 100, 50),
+        "pink": (255, 150, 180),
+        "light pink": (255, 200, 220),
+        "hot pink": (255, 105, 180),
+        "purple": (180, 100, 220),
+        "light purple": (200, 150, 255),
+        "dark purple": (100, 50, 150),
+        "orange": (255, 150, 50),
+        "bright orange": (255, 165, 0),
+        "yellow": (255, 230, 80),
+        "bright yellow": (255, 255, 0),
+        "brown": (150, 100, 60),
+        "dark brown": (100, 60, 30),
+        "gray": (150, 150, 150),
+        "grey": (150, 150, 150),
+        "light gray": (200, 200, 200),
+        "dark gray": (80, 80, 80),
+        "silver": (192, 192, 192),
+        "cream": (255, 253, 208),
+        "beige": (245, 245, 220),
+        "turquoise": (64, 224, 208),
+        "cyan": (0, 255, 255),
+        "magenta": (255, 0, 255),
+        "lime": (0, 255, 0),
+        "navy": (0, 0, 128),
+        "teal": (0, 128, 128),
+        "olive": (128, 128, 0),
+        "maroon": (128, 0, 0),
+    }
+
+    color_lower = color_desc.lower().strip()
+
+    # 精确匹配
+    if color_lower in COLOR_MAP:
+        return COLOR_MAP[color_lower]
+
+    # 模糊匹配（包含关键词，优先匹配长的）
+    matches = []
+    for key, rgb in COLOR_MAP.items():
+        if key in color_lower:
+            matches.append((len(key), rgb))
+
+    if matches:
+        # 返回最长匹配
+        matches.sort(reverse=True)
+        return matches[0][1]
+
+    # 默认白色
+    return (255, 255, 255)
+
+
+def _parse_text_style(text_style: dict) -> dict:
+    """
+    解析Claude返回的文字风格为可用的参数
+
+    Args:
+        text_style: Claude返回的text_style字典
+
+    Returns:
+        {
+            "title_color": (r, g, b),
+            "title_bold": bool,
+            "title_has_shadow": bool,
+            "title_has_outline": bool,
+            "author_color": (r, g, b),
+            "author_bold": bool,
+            "description_color": (r, g, b),
+        }
+    """
+    if not text_style:
+        # 默认值
+        return {
+            "title_color": (255, 255, 255),
+            "title_bold": True,
+            "title_has_shadow": True,
+            "title_has_outline": False,
+            "author_color": (255, 225, 130),
+            "author_bold": False,
+            "description_color": (225, 225, 225),
+        }
+
+    # 解析标题颜色
+    title_color = _parse_color(text_style.get("title_color"))
+    if not title_color:
+        title_color = (255, 255, 255)  # 默认白色
+
+    # 解析标题风格
+    title_style_desc = (text_style.get("title_style") or "").lower()
+    title_bold = "bold" in title_style_desc or "thick" in title_style_desc
+
+    # 解析标题效果
+    title_effects = (text_style.get("title_effects") or "").lower()
+    title_has_shadow = "shadow" in title_effects
+    title_has_outline = "outline" in title_effects
+
+    # 解析作者颜色
+    author_color = _parse_color(text_style.get("author_color"))
+    if not author_color:
+        # 如果没有作者颜色，使用标题颜色的变体（稍微暗一点或金色）
+        if title_color == (255, 255, 255):
+            author_color = (255, 225, 130)  # 金色
+        else:
+            # 使用标题颜色的80%亮度
+            author_color = tuple(int(c * 0.8) for c in title_color)
+
+    # 解析作者风格
+    author_style_desc = (text_style.get("author_style") or "").lower()
+    author_bold = "bold" in author_style_desc
+
+    # 解析简介颜色
+    description_color = _parse_color(text_style.get("description_color"))
+    if not description_color:
+        # 默认浅灰色
+        description_color = (225, 225, 225)
+
+    return {
+        "title_color": title_color,
+        "title_bold": title_bold,
+        "title_has_shadow": title_has_shadow,
+        "title_has_outline": title_has_outline,
+        "author_color": author_color,
+        "author_bold": author_bold,
+        "description_color": description_color,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 文字合成
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -584,11 +745,17 @@ def _make_gradient_overlay(size, start_ratio=0.40):
     return Image.fromarray(arr, mode="RGBA")
 
 
-def _composite_back(img: Image.Image, book_info: dict) -> Image.Image:
+def _composite_back(img: Image.Image, book_info: dict, text_style: dict = None) -> Image.Image:
     """
-    封底文字合成（完全照搬本地测试脚本 composite_back）：
+    封底文字合成，应用从封面识别的字体风格
     - 渐变遮罩从40%高度开始，缓动曲线，无硬边
-    - 书名白色粗体+阴影，作者暖金色，虚线分隔，简介自动折行
+    - 书名、作者、简介应用识别的颜色和风格
+    - 如果没有text_style，使用默认值
+
+    Args:
+        img: 封底图片
+        book_info: 书籍信息 {"title": str, "authors": list, "description": str}
+        text_style: Claude识别的文字风格（可选）
     """
     import textwrap
 
@@ -604,21 +771,33 @@ def _composite_back(img: Image.Image, book_info: dict) -> Image.Image:
     max_tw = mr - mx
     y = int(h * 0.50)
 
-    # 书名 — 白色粗体 + 黑色阴影
+    # 解析文字风格
+    style = _parse_text_style(text_style)
+
+    # 书名 — 应用识别的颜色和风格
     title = book_info.get("title") or "Unknown Title"
     font_size = int(w * 0.070)
-    font = _load_font(font_size, bold=True)
+    font = _load_font(font_size, bold=style["title_bold"])
     while font_size > int(w * 0.026):
         if draw.textbbox((0, 0), title, font=font)[2] <= max_tw:
             break
         font_size -= 2
-        font = _load_font(font_size, bold=True)
-    _draw_text_shadowed(
-        draw, (mx, y), title, font, fill=(255, 255, 255), shadow=(0, 0, 0), offset=2
-    )
+        font = _load_font(font_size, bold=style["title_bold"])
+
+    # 应用识别的颜色和阴影
+    if style["title_has_shadow"]:
+        _draw_text_shadowed(
+            draw, (mx, y), title, font,
+            fill=style["title_color"],
+            shadow=(0, 0, 0),
+            offset=2
+        )
+    else:
+        draw.text((mx, y), title, font=font, fill=style["title_color"])
+
     y += draw.textbbox((0, 0), title, font=font)[3] + int(h * 0.016)
 
-    # 作者 — 暖金色
+    # 作者 — 应用识别的颜色
     authors = book_info.get("authors", [])
     if authors:
         a_str = (
@@ -626,13 +805,13 @@ def _composite_back(img: Image.Image, book_info: dict) -> Image.Image:
             if all(c.isascii() for c in authors[0])
             else ", ".join(authors[:3])
         )
-        font_a = _load_font(int(w * 0.029))
+        font_a = _load_font(int(w * 0.029), bold=style["author_bold"])
         _draw_text_shadowed(
             draw,
             (mx, y),
             a_str,
             font_a,
-            fill=(255, 225, 130),
+            fill=style["author_color"],
             shadow=(0, 0, 0),
             offset=1,
         )
@@ -645,11 +824,25 @@ def _composite_back(img: Image.Image, book_info: dict) -> Image.Image:
         lx += dash + gap
     y += int(h * 0.026)
 
-    # 简介
+    # 简介 — 应用识别的颜色
     desc = (
         book_info.get("description")
         or "A captivating story that will keep you turning pages."
     )
+
+    # 清理HTML标签
+    import re
+    desc = re.sub(r'<[^>]+>', '', desc)  # 删除所有HTML标签
+    desc = desc.replace('&nbsp;', ' ')  # 替换HTML空格
+    desc = desc.replace('&lt;', '<')
+    desc = desc.replace('&gt;', '>')
+    desc = desc.replace('&amp;', '&')
+    desc = desc.replace('&quot;', '"')
+    desc = desc.strip()  # 去除首尾空格
+
+    if not desc:
+        desc = "A captivating story that will keep you turning pages."
+
     font_b = _load_font(int(w * 0.025))
     avg_cw = max(1, int(w * 0.025 * 0.55))
     max_char = max(20, max_tw // avg_cw)
@@ -661,7 +854,7 @@ def _composite_back(img: Image.Image, book_info: dict) -> Image.Image:
                 (mx, y),
                 "…",
                 font_b,
-                fill=(190, 190, 190),
+                fill=style["description_color"],
                 shadow=(0, 0, 0),
                 offset=1,
             )
@@ -671,7 +864,7 @@ def _composite_back(img: Image.Image, book_info: dict) -> Image.Image:
             (mx, y),
             line,
             font_b,
-            fill=(225, 225, 225),
+            fill=style["description_color"],
             shadow=(0, 0, 0),
             offset=1,
         )
@@ -817,59 +1010,46 @@ def generate_ai_material(
     )
 
     # 提取分析结果
-    style_analysis = analysis.get("style_analysis", "")
-    ipadapter_weight = analysis.get("ipadapter_weight", 1.0)
-    recommended_steps = analysis.get("recommended_steps", 20)
+    style_analysis = analysis.get("analysis", "")
+    style_prompt = analysis.get("style_prompt", "")
+    negative_prompt = analysis.get("negative_prompt", "blurry, low quality, distorted, text, watermark, signature, ugly, deformed, noisy, artifacts, jpeg artifacts, oversaturated, undersaturated")
+    text_style = analysis.get("text_style", None)  # 提取文字风格
     token_usage = analysis.get("token_usage", {})
+
+    # 固定使用优化后的参数
+    ipadapter_weight = 1.05  # 优化值
+    steps = 30  # 优化值
 
     if progress_callback:
         progress_callback(8, f"Claude分析完成: {style_analysis[:60]}...")
         progress_callback(9, f"Token消耗: 输入{token_usage.get('input_tokens', 0)} + 输出{token_usage.get('output_tokens', 0)} = {token_usage.get('total_tokens', 0)}")
 
-    # 根据 target 选择对应的 prompt
-    if target == "spine":
-        prompt = analysis.get("spine_prompt", "seamless narrow extension, natural continuation")
-        if progress_callback:
-            progress_callback(10, f"识别的书脊图案: {prompt}")
-        # 书脊 prompt 通常较短，补充一些细节
-        genre = ", ".join((categories or [])[:2])
-        prompt = (
-            f"{prompt}. "
-            f"Seamlessly extend the book cover edge to the left as a narrow spine strip. "
-            f"{(genre + ' style, ') if genre else ''}"
-            f"Exact same background color, texture and pattern as the cover left edge. "
-            f"Simple vertical continuation, no new elements, seamless transition."
-        )
-    else:  # back
-        prompt = analysis.get("back_cover_prompt", "seamless extension, natural continuation, open space for text")
-        if progress_callback:
-            progress_callback(10, f"识别的封底图案: {prompt}")
-        # 保留 Claude 识别的具体图案和装饰元素，只补充技术指导
-        # 类似书脊的处理方式：保留内容描述 + 补充生成指导
-        prompt = (
-            f"{prompt}, "
-            f"seamless extension of the book cover to the left, "
-            f"maintain exact same decorative patterns and visual elements from the cover, "
-            f"lower half open and plain for text overlay, "
-            f"no characters, no text, no logos"
-        )
+    # 记录识别的文字风格
+    if text_style and target == "back":
+        logger.info(f"[{request_id}] 识别的文字风格:")
+        logger.info(f"[{request_id}]   标题颜色: {text_style.get('title_color', 'null')}")
+        logger.info(f"[{request_id}]   标题风格: {text_style.get('title_style', 'null')}")
+        logger.info(f"[{request_id}]   作者颜色: {text_style.get('author_color', 'null')}")
+        logger.info(f"[{request_id}]   简介颜色: {text_style.get('description_color', 'null')}")
+
+    # 使用 Claude 生成的 style_prompt（已经包含具体图案描述）
+    prompt = style_prompt
+    if not prompt:
+        # 降级处理
+        prompt = "seamless extension, natural continuation, open space for text, decorative elements"
+
+    if progress_callback:
+        progress_callback(10, f"识别的图案: {prompt[:60]}...")
 
     if progress_callback:
         progress_callback(11, f"完整Prompt: {prompt[:80]}...")
-        progress_callback(12, f"IP-Adapter权重: {ipadapter_weight}, 生成步数: {recommended_steps}")
+        progress_callback(12, f"IP-Adapter权重: {ipadapter_weight}, 生成步数: {steps}")
 
     logger.info(f"[{request_id}] 使用 Prompt: {prompt[:100]}...")
-    logger.info(f"[{request_id}] IP-Adapter 权重: {ipadapter_weight}, 步数: {recommended_steps}")
-
-    # 使用 Claude 推荐的步数（如果合理）
-    if 10 <= recommended_steps <= 30:
-        steps = recommended_steps
-    else:
-        steps = 20  # 默认 20 步
+    logger.info(f"[{request_id}] IP-Adapter 权重: {ipadapter_weight}, 步数: {steps}")
 
     if progress_callback:
-        # 提取Claude识别的关键图案（back_cover_prompt的前30个字符）
-        prompt_preview = analysis.get("back_cover_prompt" if target == "back" else "spine_prompt", "")[:50]
+        prompt_preview = prompt[:50]
         progress_callback(14, f"【第二步】风格分析完成，准备生成{target_name}...")
         progress_callback(15, f"  ├─ 识别图案: {prompt_preview}...")
         progress_callback(16, f"  ├─ IP-Adapter权重: {ipadapter_weight}")
@@ -950,10 +1130,11 @@ def generate_ai_material(
         canvas_fn=canvas_fn,
         mask_fn=mask_fn,
         prompt=prompt,
+        negative_prompt=negative_prompt,  # 添加 negative_prompt
         seed=seed,
         steps=steps,
         reference_image_fn=cover_ref_fn,  # 传入封面参考图
-        ipadapter_weight=ipadapter_weight,  # 使用 Claude 推荐的权重
+        ipadapter_weight=ipadapter_weight,  # 使用优化的权重 1.05
     )
 
     if progress_callback:
@@ -979,7 +1160,7 @@ def generate_ai_material(
             "authors": authors,
             "description": description,
         }
-        generated = _composite_back(generated, book_info)
+        generated = _composite_back(generated, book_info, text_style)  # 传递text_style
     else:
         # 原版逻辑：先缩回真实尺寸，再在真实尺寸上合成文字
         raw_spine = result_img.crop((0, 0, spine_px_gen, page_h))
