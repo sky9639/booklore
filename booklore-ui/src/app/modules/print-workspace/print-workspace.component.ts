@@ -626,6 +626,13 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   }
 
   /** 跳转到官方 PDF 阅读器（print 模式） */
+  /**
+   * 预览PDF
+   */
+  previewPdf(): void {
+    this.router.navigate(["/pdf-reader", "print", this.bookId]);
+  }
+
   private openPdfViewer() {
     this.router.navigate(["/pdf-reader", "print", this.bookId]);
   }
@@ -821,7 +828,12 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
             if (data.new_size) {
               this.addResizeLog(`新尺寸: ${data.new_size.width_mm}×${data.new_size.height_mm}mm`);
             }
-            alert('PDF格式化完成！');
+
+            // 格式化完成后跳转到预览页面
+            const shouldPreview = confirm('PDF格式化完成！是否立即预览？');
+            if (shouldPreview) {
+              this.previewPdf();
+            }
           }
 
           // 刷新PDF尺寸信息

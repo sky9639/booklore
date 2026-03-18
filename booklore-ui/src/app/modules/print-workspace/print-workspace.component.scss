@@ -430,6 +430,32 @@ Booklore Print Workspace
   gap: 8px;
   font-size: 15px;
   font-weight: 600;
+  position: relative;
+}
+
+.preview-pdf-btn {
+  margin-left: auto;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #2c3e55;
+  background: #0c1a2b;
+  color: #8ea3bf;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+
+  &:hover {
+    background: #1a2f4a;
+    color: #e6edf3;
+    border-color: #3d5270;
+  }
+
+  i {
+    font-size: 14px;
+  }
 }
 .param-group {
   display: flex;
