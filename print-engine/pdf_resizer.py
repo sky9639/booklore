@@ -176,7 +176,6 @@ class PdfResizer:
         from PyPDF2 import Transformation
         from reportlab.pdfgen import canvas
         import io
-        import PyMuPDF as fitz
 
         try:
             # 获取原页面尺寸
@@ -202,41 +201,43 @@ class PdfResizer:
             offset_x = (target_w_pt - scaled_w) / 2
             offset_y = (target_h_pt - scaled_h) / 2
 
-            # 使用PyMuPDF重建页面（避免PyPDF2的对象引用问题）
-            # 1. 将当前页面渲染为图像
-            temp_pdf = io.BytesIO()
-            temp_writer = PdfWriter()
-            temp_writer.add_page(page)
-            temp_writer.write(temp_pdf)
-            temp_pdf.seek(0)
-
-            # 2. 使用PyMuPDF读取并渲染
-            doc = fitz.open(stream=temp_pdf, filetype="pdf")
-            pix = doc[0].get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
-            img_data = pix.tobytes("png")
-            doc.close()
-
-            # 3. 使用reportlab创建新页面
+            # 使用reportlab创建白色背景页面
             packet = io.BytesIO()
             can = canvas.Canvas(packet, pagesize=(target_w_pt, target_h_pt))
-
-            # 白色背景
-            can.setFillColorRGB(1, 1, 1)
+            can.setFillColorRGB(1, 1, 1)  # 白色
             can.rect(0, 0, target_w_pt, target_h_pt, fill=1, stroke=0)
-
-            # 绘制缩放后的页面图像（居中）
-            from reportlab.lib.utils import ImageReader
-            img_reader = ImageReader(io.BytesIO(img_data))
-            can.drawImage(img_reader, offset_x, offset_y, width=scaled_w, height=scaled_h)
             can.save()
 
-            # 4. 读取生成的PDF页面
+            # 读取reportlab生成的PDF
             packet.seek(0)
             from PyPDF2 import PdfReader as TempReader
             temp_reader = TempReader(packet)
             new_page = temp_reader.pages[0]
 
-            return new_page
+            # 尝试合并原页面（带缩放和偏移）
+            try:
+                # 创建临时页面副本，避免修改原页面
+                temp_packet = io.BytesIO()
+                temp_writer = PdfWriter()
+                temp_writer.add_page(page)
+                temp_writer.write(temp_packet)
+                temp_packet.seek(0)
+
+                temp_pdf_reader = TempReader(temp_packet)
+                page_copy = temp_pdf_reader.pages[0]
+
+                # 应用变换
+                transformation = Transformation().scale(scale, scale).translate(offset_x, offset_y)
+                page_copy.add_transformation(transformation)
+
+                # 合并到白色背景页面
+                new_page.merge_page(page_copy)
+
+                return new_page
+            except Exception as merge_error:
+                # 如果合并失败，返回白色背景页面
+                logger.warning(f"第{page_num}页合并失败({str(merge_error)})，使用空白页")
+                return new_page
 
         except Exception as e:
             error_detail = str(e)
