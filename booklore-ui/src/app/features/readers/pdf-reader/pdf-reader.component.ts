@@ -104,6 +104,31 @@ export class PdfReaderComponent implements OnInit, OnDestroy {
 		}
 
 		// ===============================
+		// ⭐ SOURCE-PRINT 模式（原始电子书 PDF）
+		// ===============================
+		if (type === 'source-print') {
+		  this.bookData =
+			`${API_CONFIG.BASE_URL}/api/print/${this.bookId}/source-pdf-content`;
+
+		  const token =
+			this.authService.getOidcAccessToken()
+			|| this.authService.getInternalAccessToken();
+
+		  this.authorization = token
+			? `Bearer ${token}`
+			: '';
+
+		  // 固定默认值
+		  this.page = 1;
+		  this.zoom = 'auto';
+		  this.spread = 'off';
+		  this.canPrint = true;
+
+		  this.isLoading = false;
+		  return;
+		}
+
+		// ===============================
 		// ⭐ 原 BOOK 模式（保持官方逻辑）
 		// ===============================
 

@@ -627,10 +627,10 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
 
   /** 跳转到官方 PDF 阅读器（print 模式） */
   /**
-   * 预览PDF
+   * 预览原始PDF（电子书PDF）
    */
   previewPdf(): void {
-    this.router.navigate(["/pdf-reader", "print", this.bookId]);
+    this.router.navigate(["/pdf-reader", "source-print", this.bookId]);
   }
 
   private openPdfViewer() {

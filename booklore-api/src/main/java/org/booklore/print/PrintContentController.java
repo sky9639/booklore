@@ -86,4 +86,42 @@ public class PrintContentController {
             return ResponseEntity.internalServerError().build();
         }
     }
+
+    /**
+     * 预览原始电子书PDF（用于PDF尺寸区域的预览按钮）
+     */
+    @GetMapping("/{bookId}/source-pdf-content")
+    public ResponseEntity<Resource> getSourcePdfContent(@PathVariable Long bookId) {
+        try {
+            BookEntity book = bookRepository
+                .findById(bookId)
+                .orElseThrow(() -> new RuntimeException("Book not found"));
+
+            Path fullPath = book.getFullFilePath();
+            if (fullPath == null) {
+                return ResponseEntity.notFound().build();
+            }
+
+            // 原始PDF路径：book.pdf
+            File pdfFile = fullPath.toFile();
+            if (!pdfFile.exists()) {
+                return ResponseEntity.notFound().build();
+            }
+
+            InputStreamResource resource = new InputStreamResource(
+                new FileInputStream(pdfFile)
+            );
+
+            return ResponseEntity.ok()
+                .header(
+                    HttpHeaders.CONTENT_DISPOSITION,
+                    "inline; filename=\"" + book.getName() + ".pdf\""
+                )
+                .contentLength(pdfFile.length())
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(resource);
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().build();
+        }
+    }
 }
