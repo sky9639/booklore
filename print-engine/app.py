@@ -198,6 +198,185 @@ def save_workspace_params(request: SaveParamsRequest):
 
 
 # ==============================
+# PDF信息和格式化相关API
+# ==============================
+
+from pdf_info import get_pdf_info
+from pdf_resizer import PdfResizer
+
+# PDF格式化任务存储
+_pdf_resize_tasks = {}
+_pdf_resize_tasks_lock = threading.Lock()
+
+
+class PdfInfoRequest(BaseModel):
+    book_path: str
+
+
+class PdfResizeRequest(BaseModel):
+    book_path: str
+    target_size: str  # A4/A5/B5
+
+
+@app.post("/pdf/info")
+def pdf_info(request: PdfInfoRequest):
+    """
+    获取PDF文件信息（尺寸、页数等）
+
+    Args:
+        request: 包含book_path的请求
+
+    Returns:
+        {
+            "success": True/False,
+            "data": {
+                "width_mm": 210.0,
+                "height_mm": 297.0,
+                "orientation": "portrait",
+                "page_count": 150,
+                "has_mixed_sizes": False,
+                "file_size_mb": 12.5
+            },
+            "error": "错误信息"
+        }
+    """
+    return get_pdf_info(request.book_path)
+
+
+@app.post("/pdf/resize/start")
+def pdf_resize_start(request: PdfResizeRequest):
+    """
+    启动PDF格式化任务
+
+    Args:
+        request: 包含book_path和target_size的请求
+
+    Returns:
+        {"task_id": "uuid"}
+    """
+    # 验证目标尺寸
+    if request.target_size.upper() not in ['A4', 'A5', 'B5']:
+        raise HTTPException(status_code=400, detail="target_size must be A4/A5/B5")
+
+    task_id = str(uuid.uuid4())
+
+    # 初始化任务状态
+    with _pdf_resize_tasks_lock:
+        _pdf_resize_tasks[task_id] = {
+            "status": "running",
+            "progress": 0,
+            "stage": "准备开始...",
+            "current_page": 0,
+            "total_pages": 0
+        }
+
+    # 启动后台线程执行格式化
+    threading.Thread(
+        target=_run_pdf_resize_task,
+        args=(task_id, request.book_path, request.target_size),
+        daemon=True
+    ).start()
+
+    return {"task_id": task_id}
+
+
+def _run_pdf_resize_task(task_id: str, book_path: str, target_size: str):
+    """后台执行PDF格式化任务"""
+
+    def progress_callback(data: dict):
+        """进度回调"""
+        with _pdf_resize_tasks_lock:
+            if task_id in _pdf_resize_tasks:
+                _pdf_resize_tasks[task_id].update(data)
+
+    try:
+        resizer = PdfResizer(book_path, target_size, progress_callback)
+        result = resizer.resize()
+
+        with _pdf_resize_tasks_lock:
+            if result["success"]:
+                _pdf_resize_tasks[task_id] = {
+                    "status": "done",
+                    "progress": 100,
+                    "stage": "格式化完成！",
+                    "new_size": result["new_size"]
+                }
+            else:
+                _pdf_resize_tasks[task_id] = {
+                    "status": "error",
+                    "progress": 0,
+                    "error": result["error"]
+                }
+    except Exception as e:
+        with _pdf_resize_tasks_lock:
+            _pdf_resize_tasks[task_id] = {
+                "status": "error",
+                "progress": 0,
+                "error": str(e)
+            }
+
+
+@app.get("/pdf/resize/progress/{task_id}")
+def pdf_resize_progress(task_id: str):
+    """
+    SSE流式推送PDF格式化进度
+
+    事件格式：
+        - 进度更新: {"progress": 45, "status": "running", "stage": "...", "current_page": 10, "total_pages": 150}
+        - 完成: {"progress": 100, "status": "done", "stage": "格式化完成！", "new_size": {...}}
+        - 错误: {"progress": 0, "status": "error", "error": "..."}
+        - 心跳: ": heartbeat"
+
+    Args:
+        task_id: 任务ID
+
+    Returns:
+        StreamingResponse: SSE流
+    """
+    import time as _time
+
+    def _stream():
+        last_progress = -1
+        last_stage = ""
+        last_heartbeat = _time.time()
+        deadline = _time.time() + 600  # 10分钟超时
+
+        while _time.time() < deadline:
+            # 读取任务状态
+            with _pdf_resize_tasks_lock:
+                task = dict(_pdf_resize_tasks.get(task_id, {}))
+
+            if not task:
+                yield f"data: {json.dumps({'status': 'error', 'error': 'Task not found'})}\n\n"
+                break
+
+            # 发送进度更新
+            progress = task.get("progress", 0)
+            stage = task.get("stage", "")
+            if progress != last_progress or stage != last_stage:
+                yield f"data: {json.dumps(task)}\n\n"
+                last_progress = progress
+                last_stage = stage
+
+            # 任务完成或失败
+            if task.get("status") in ("done", "error"):
+                yield f"data: {json.dumps(task)}\n\n"
+                break
+
+            # 心跳
+            now = _time.time()
+            if now - last_heartbeat > 10:
+                yield ": heartbeat\n\n"
+                last_heartbeat = now
+
+            _time.sleep(0.5)
+
+    import json
+    return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+
+# ==============================
 # 生成预览
 # ==============================
 

@@ -146,4 +146,20 @@ export class PrintService {
   ): string {
     return `${this.baseUrl}/print/${bookId}/asset/${category}/${filename}`;
   }
+
+  /** 获取PDF信息（尺寸、页数等） */
+  getPdfInfo(bookId: number | string): Observable<any> {
+    return this.http.post<any>(
+      `${this.baseUrl}/print/${bookId}/pdf/info`,
+      {}
+    );
+  }
+
+  /** 启动PDF格式化任务 */
+  resizePdf(bookId: number | string, targetSize: string): Observable<{ task_id: string }> {
+    return this.http.post<{ task_id: string }>(
+      `${this.baseUrl}/print/${bookId}/pdf/resize/start`,
+      { target_size: targetSize }
+    );
+  }
 }

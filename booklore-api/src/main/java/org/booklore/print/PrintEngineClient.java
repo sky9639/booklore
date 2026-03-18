@@ -148,4 +148,80 @@ public class PrintEngineClient {
             );
         }
     }
+
+    /**
+     * 获取PDF信息（尺寸、页数等）
+     */
+    public Map getPdfInfo(Map<String, Object> payload) {
+        try {
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                BASE_URL + "/pdf/info",
+                payload,
+                Map.class
+            );
+            return response.getBody();
+        } catch (Exception e) {
+            return Map.of("success", false, "error", e.getMessage());
+        }
+    }
+
+    /**
+     * 启动PDF格式化任务
+     */
+    public Map startPdfResize(Map<String, Object> payload) {
+        try {
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                BASE_URL + "/pdf/resize/start",
+                payload,
+                Map.class
+            );
+            Map body = response.getBody();
+            if (body == null) throw new RuntimeException("startPdfResize returned null");
+            return body;
+        } catch (Exception e) {
+            throw new RuntimeException("startPdfResize failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * PDF格式化进度（SSE流）
+     */
+    public org.springframework.web.servlet.mvc.method.annotation.SseEmitter streamPdfResizeProgress(String taskId) {
+        org.springframework.web.servlet.mvc.method.annotation.SseEmitter emitter =
+            new org.springframework.web.servlet.mvc.method.annotation.SseEmitter(600_000L);
+
+        new Thread(() -> {
+            try {
+                java.net.URL url = new java.net.URL(BASE_URL + "/pdf/resize/progress/" + taskId);
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(10_000);
+                conn.setReadTimeout(600_000);
+
+                java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(conn.getInputStream())
+                );
+
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.startsWith("data: ")) {
+                        String data = line.substring(6);
+                        emitter.send(
+                            org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event()
+                                .data(data)
+                        );
+                    } else if (line.startsWith(": ")) {
+                        // 心跳，忽略
+                    }
+                }
+
+                emitter.complete();
+                reader.close();
+            } catch (Exception e) {
+                emitter.completeWithError(e);
+            }
+        }).start();
+
+        return emitter;
+    }
 }

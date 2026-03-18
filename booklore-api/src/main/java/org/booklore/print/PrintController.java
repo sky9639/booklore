@@ -947,4 +947,81 @@ public class PrintController {
         meta.put("book_page_count", pageCount);
         return meta;
     }
+
+    /**
+     * ===============================
+     * 获取PDF信息（尺寸、页数等）
+     * ===============================
+     * POST /api/v1/print/{bookId}/pdf/info
+     */
+    @PostMapping("/{bookId}/pdf/info")
+    public ResponseEntity<?> getPdfInfo(@PathVariable Long bookId) {
+        BookEntity book = bookRepository
+            .findById(bookId)
+            .orElseThrow(() -> new RuntimeException("Book not found"));
+
+        Path fullPath = book.getFullFilePath();
+        if (fullPath == null) {
+            return ResponseEntity.badRequest().body(
+                Map.of("error", "Book file path could not be resolved")
+            );
+        }
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("book_path", fullPath.toString());
+
+        Map result = client.getPdfInfo(payload);
+        return ResponseEntity.ok(result);
+    }
+
+    /**
+     * ===============================
+     * 启动PDF格式化任务
+     * ===============================
+     * POST /api/v1/print/{bookId}/pdf/resize/start
+     */
+    @PostMapping("/{bookId}/pdf/resize/start")
+    public ResponseEntity<?> startPdfResize(
+        @PathVariable Long bookId,
+        @RequestBody Map<String, String> request
+    ) {
+        BookEntity book = bookRepository
+            .findById(bookId)
+            .orElseThrow(() -> new RuntimeException("Book not found"));
+
+        Path fullPath = book.getFullFilePath();
+        if (fullPath == null) {
+            return ResponseEntity.badRequest().body(
+                Map.of("error", "Book file path could not be resolved")
+            );
+        }
+
+        String targetSize = request.get("target_size");
+        if (targetSize == null || targetSize.isEmpty()) {
+            return ResponseEntity.badRequest().body(
+                Map.of("error", "target_size is required")
+            );
+        }
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("book_path", fullPath.toString());
+        payload.put("target_size", targetSize);
+
+        Map result = client.startPdfResize(payload);
+        return ResponseEntity.ok(result);
+    }
+
+    /**
+     * ===============================
+     * PDF格式化进度（SSE流）
+     * ===============================
+     * GET /api/v1/print/{bookId}/pdf/resize/progress/{taskId}
+     */
+    @GetMapping("/{bookId}/pdf/resize/progress/{taskId}")
+    public SseEmitter getPdfResizeProgress(
+        @PathVariable Long bookId,
+        @PathVariable String taskId
+    ) {
+        return client.streamPdfResizeProgress(taskId);
+    }
 }

@@ -62,8 +62,15 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     width: 0,
     height: 0,
     orientation: '未知',
-    matchedSize: null as 'A4' | 'A5' | 'B5' | null
+    matchedSize: null as 'A4' | 'A5' | 'B5' | null,
+    loading: true,
+    error: ''
   };
+
+  /** PDF格式化状态 */
+  resizing = false;
+  resizeProgress = 0;
+  resizeStage = '';
 
   // ── AI 统一生成状态 ──────────────────────────────────────────
   aiGenerating = false;
@@ -99,12 +106,12 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       if (!ws) return;
       this.compositeCache.clear();
       this.refreshComposite();
-      this.updatePdfSizeInfo();
       // 强制触发变更检测，确保历史预览图可以正常切换
       this.cdr.detectChanges();
     });
 
     this.initWorkspace();
+    this.loadPdfInfo();
   }
 
   ngOnDestroy(): void {
@@ -648,37 +655,188 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * 更新PDF尺寸信息
+   * 加载PDF尺寸信息
+   * 从后端获取电子书PDF的实际尺寸
+   */
+  private loadPdfInfo(): void {
+    this.pdfSizeInfo.loading = true;
+    this.pdfSizeInfo.error = '';
+
+    this.print.getPdfInfo(this.bookId).subscribe({
+      next: (result) => {
+        if (result.success && result.data) {
+          const data = result.data;
+          this.pdfSizeInfo = {
+            width: Math.round(data.width_mm),
+            height: Math.round(data.height_mm),
+            orientation: this.translateOrientation(data.orientation),
+            matchedSize: this.matchStandardSize(data.width_mm, data.height_mm),
+            loading: false,
+            error: ''
+          };
+        } else {
+          this.pdfSizeInfo = {
+            width: 0,
+            height: 0,
+            orientation: '未知',
+            matchedSize: null,
+            loading: false,
+            error: result.error || 'PDF文件不存在'
+          };
+        }
+        this.cdr.detectChanges();
+      },
+      error: (err) => {
+        this.pdfSizeInfo = {
+          width: 0,
+          height: 0,
+          orientation: '未知',
+          matchedSize: null,
+          loading: false,
+          error: '获取PDF信息失败'
+        };
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  /**
+   * 翻译方向
+   */
+  private translateOrientation(orientation: string): string {
+    const map: Record<string, string> = {
+      'portrait': '竖向',
+      'landscape': '横向',
+      'square': '正方形'
+    };
+    return map[orientation] || '未知';
+  }
+
+  /**
+   * 格式化PDF
+   */
+  onResizePdf(): void {
+    if (this.resizing) return;
+
+    // 弹出尺寸选择对话框
+    const targetSize = this.showSizeSelector();
+    if (!targetSize) return;
+
+    // 确认对话框
+    const confirmed = confirm(
+      `确认要将PDF格式化为${targetSize}尺寸吗？\n\n` +
+      `系统会先备份原文件，确保安全。\n` +
+      `格式化过程可能需要几分钟，请耐心等待。`
+    );
+
+    if (!confirmed) return;
+
+    this.resizing = true;
+    this.resizeProgress = 0;
+    this.resizeStage = '准备中...';
+
+    // 启动格式化任务
+    this.print.resizePdf(this.bookId, targetSize).subscribe({
+      next: (result) => {
+        if (!result.task_id) {
+          this.handleResizeError('启动格式化任务失败');
+          return;
+        }
+
+        // 监听进度
+        this.watchResizeProgress(result.task_id);
+      },
+      error: (err) => {
+        this.handleResizeError(err.error?.error || '启动失败');
+      }
+    });
+  }
+
+  /**
+   * 显示尺寸选择对话框
+   */
+  private showSizeSelector(): 'A4' | 'A5' | 'B5' | null {
+    const choice = prompt(
+      '请选择目标尺寸：\n\n' +
+      '1 - A4 (210×297mm)\n' +
+      '2 - A5 (148×210mm)\n' +
+      '3 - B5 (176×250mm)\n\n' +
+      '请输入数字 1-3：'
+    );
+
+    const map: Record<string, 'A4' | 'A5' | 'B5'> = {
+      '1': 'A4',
+      '2': 'A5',
+      '3': 'B5'
+    };
+
+    return map[choice || ''] || null;
+  }
+
+  /**
+   * 监听格式化进度
+   */
+  private watchResizeProgress(taskId: string): void {
+    const pythonBase = `${window.location.protocol}//${window.location.hostname}:5800`;
+    const url = `${pythonBase}/pdf/resize/progress/${taskId}`;
+    const es = new EventSource(url);
+
+    es.onmessage = (event: MessageEvent) => {
+      try {
+        const data = JSON.parse(event.data);
+
+        this.resizeProgress = data.progress || 0;
+        this.resizeStage = data.stage || '';
+
+        if (data.status === 'done') {
+          es.close();
+          this.resizing = false;
+          this.resizeProgress = 100;
+
+          alert('PDF格式化完成！');
+
+          // 刷新PDF尺寸信息
+          setTimeout(() => {
+            this.loadPdfInfo();
+          }, 500);
+        } else if (data.status === 'error') {
+          es.close();
+          this.handleResizeError(data.error || '未知错误');
+        }
+
+        this.cdr.detectChanges();
+      } catch (e) {
+        es.close();
+        this.handleResizeError('解析进度数据失败');
+      }
+    };
+
+    es.onerror = () => {
+      if (es.readyState === EventSource.CLOSED) {
+        es.close();
+        this.handleResizeError('连接中断');
+      }
+    };
+  }
+
+  /**
+   * 处理格式化错误
+   */
+  private handleResizeError(message: string): void {
+    this.resizing = false;
+    this.resizeProgress = 0;
+    this.resizeStage = '';
+    alert(`格式化失败：${message}`);
+    this.cdr.detectChanges();
+  }
+
+  /**
+   * 更新PDF尺寸信息（已废弃，改用loadPdfInfo）
    * 根据当前trim_size计算物理尺寸、方向和匹配的标准尺寸
    */
   private updatePdfSizeInfo(): void {
-    const ws = this.workspace;
-    if (!ws) {
-      this.pdfSizeInfo = {
-        width: 0,
-        height: 0,
-        orientation: '未知',
-        matchedSize: null
-      };
-      return;
-    }
-
-    // 获取页面尺寸（mm）
-    const width = this.preview.getPageWidth(ws as any);
-    const height = this.preview.getPageHeight(ws as any);
-
-    // 判断方向
-    const orientation = width > height ? '横向' : width < height ? '竖向' : '正方形';
-
-    // 匹配标准尺寸（容差2mm）
-    const matchedSize = this.matchStandardSize(width, height);
-
-    this.pdfSizeInfo = {
-      width: Math.round(width),
-      height: Math.round(height),
-      orientation,
-      matchedSize
-    };
+    // 此方法已废弃，保留以兼容旧代码
+    // 现在使用loadPdfInfo()从后端获取实际PDF尺寸
   }
 
   /**

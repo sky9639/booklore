@@ -204,6 +204,28 @@ Booklore Print Workspace
   gap: 14px;
 }
 
+.size-loading,
+.size-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px;
+  font-size: 13px;
+  color: #8ea3bf;
+
+  i {
+    font-size: 18px;
+  }
+}
+
+.size-error {
+  color: #ff8888;
+  background: rgba(255, 80, 80, 0.1);
+  border: 1px solid rgba(255, 80, 80, 0.25);
+  border-radius: 6px;
+}
+
 .size-display {
   display: flex;
   align-items: center;
@@ -295,6 +317,72 @@ Booklore Print Workspace
   i {
     font-size: 14px;
   }
+}
+
+.resize-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.resize-btn {
+  width: 100%;
+  padding: 10px 16px;
+  border-radius: 6px;
+  border: none;
+  background: linear-gradient(145deg, #2f6feb, #1d4ed8);
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+
+  &:hover:not(:disabled) {
+    background: linear-gradient(145deg, #3a7bff, #2563eb);
+    box-shadow: 0 4px 14px rgba(47, 111, 235, 0.4);
+    transform: translateY(-1px);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  i {
+    font-size: 14px;
+  }
+}
+
+.resize-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 6px;
+  background: #0c1624;
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid #1a2f4a;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2f6feb, #1d4ed8);
+  transition: width 0.3s ease;
+  border-radius: 3px;
+}
+
+.progress-text {
+  font-size: 11px;
+  color: #8ea3bf;
+  text-align: center;
 }
 
 /* =========================================================

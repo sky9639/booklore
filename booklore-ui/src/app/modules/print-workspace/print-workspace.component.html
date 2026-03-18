@@ -21,25 +21,63 @@
       <i class="pi pi-ruler-combined"></i>
       <span>PDF尺寸</span>
     </div>
-    <div class="size-display">
-      <div class="size-icon">📏</div>
-      <div class="size-details">
-        <div class="size-physical">{{ pdfSizeInfo.width }} × {{ pdfSizeInfo.height }} mm</div>
-        <div class="size-orientation">{{ pdfSizeInfo.orientation }}</div>
+
+    <!-- 加载中 -->
+    <div class="size-loading" *ngIf="pdfSizeInfo.loading">
+      <i class="pi pi-spin pi-spinner"></i>
+      <span>检测中...</span>
+    </div>
+
+    <!-- 错误状态 -->
+    <div class="size-error" *ngIf="!pdfSizeInfo.loading && pdfSizeInfo.error">
+      <i class="pi pi-exclamation-circle"></i>
+      <span>{{ pdfSizeInfo.error }}</span>
+    </div>
+
+    <!-- 正常显示 -->
+    <ng-container *ngIf="!pdfSizeInfo.loading && !pdfSizeInfo.error">
+      <div class="size-display">
+        <div class="size-icon">📏</div>
+        <div class="size-details">
+          <div class="size-physical">{{ pdfSizeInfo.width }} × {{ pdfSizeInfo.height }} mm</div>
+          <div class="size-orientation">{{ pdfSizeInfo.orientation }}</div>
+        </div>
       </div>
-    </div>
-    <div class="size-standards">
-      <div class="standard-label">标准尺寸</div>
-      <div class="standard-buttons">
-        <button class="standard-btn" [class.active]="pdfSizeInfo.matchedSize === 'A4'">A4</button>
-        <button class="standard-btn" [class.active]="pdfSizeInfo.matchedSize === 'A5'">A5</button>
-        <button class="standard-btn" [class.active]="pdfSizeInfo.matchedSize === 'B5'">B5</button>
+
+      <div class="size-standards">
+        <div class="standard-label">标准尺寸</div>
+        <div class="standard-buttons">
+          <button class="standard-btn" [class.active]="pdfSizeInfo.matchedSize === 'A4'">A4</button>
+          <button class="standard-btn" [class.active]="pdfSizeInfo.matchedSize === 'A5'">A5</button>
+          <button class="standard-btn" [class.active]="pdfSizeInfo.matchedSize === 'B5'">B5</button>
+        </div>
       </div>
-    </div>
-    <div class="size-warning" *ngIf="!pdfSizeInfo.matchedSize">
-      <i class="pi pi-exclamation-triangle"></i>
-      <span>非标准尺寸</span>
-    </div>
+
+      <div class="size-warning" *ngIf="!pdfSizeInfo.matchedSize">
+        <i class="pi pi-exclamation-triangle"></i>
+        <span>非标准尺寸</span>
+      </div>
+
+      <!-- 格式化按钮 -->
+      <div class="resize-section">
+        <button
+          class="resize-btn"
+          [disabled]="resizing"
+          (click)="onResizePdf()"
+        >
+          <i class="pi pi-refresh" *ngIf="!resizing"></i>
+          <i class="pi pi-spin pi-spinner" *ngIf="resizing"></i>
+          {{ resizing ? '格式化中...' : '格式化PDF' }}
+        </button>
+
+        <div class="resize-progress" *ngIf="resizing">
+          <div class="progress-bar">
+            <div class="progress-fill" [style.width.%]="resizeProgress"></div>
+          </div>
+          <div class="progress-text">{{ resizeProgress }}% - {{ resizeStage }}</div>
+        </div>
+      </div>
+    </ng-container>
   </div>
 
   <!-- ===================== STEP1 成书参数 ===================== -->
