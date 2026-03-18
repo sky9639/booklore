@@ -5,11 +5,13 @@ PDF格式化模块
 
 import os
 import shutil
+import logging
 from datetime import datetime
 from PyPDF2 import PdfReader, PdfWriter, PageObject
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4, A5
-import io
+
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # 标准尺寸定义（mm）
 STANDARD_SIZES = {
@@ -70,11 +72,15 @@ class PdfResizer:
 
             # 3. 读取原PDF
             self.emit_progress(15, "正在读取PDF...")
-            reader = PdfReader(self.pdf_path)
+            try:
+                reader = PdfReader(self.pdf_path, strict=False)  # 非严格模式，容忍PDF错误
+            except Exception as e:
+                raise Exception(f"无法读取PDF文件: {str(e)}")
+
             total_pages = len(reader.pages)
 
             if total_pages == 0:
-                raise Exception("PDF文件为空")
+                raise Exception("PDF文件为空，没有页面")
 
             # 4. 创建新PDF
             self.emit_progress(20, "正在创建新PDF...")
@@ -95,9 +101,14 @@ class PdfResizer:
                     total_pages=total_pages
                 )
 
-                # 处理单页
-                new_page = self._process_page(page, target_w_pt, target_h_pt)
-                writer.add_page(new_page)
+                try:
+                    # 处理单页
+                    new_page = self._process_page(page, target_w_pt, target_h_pt)
+                    writer.add_page(new_page)
+                except Exception as e:
+                    error_msg = f"第{i+1}页处理失败: {str(e)}"
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
 
             # 6. 写入临时文件
             self.emit_progress(92, "正在保存PDF...")
@@ -126,17 +137,22 @@ class PdfResizer:
 
         except Exception as e:
             # 恢复备份
+            error_detail = str(e)
+            logger.error(f"PDF格式化失败: {error_detail}")
+
             if self.backup_path and os.path.exists(self.backup_path):
                 self.emit_progress(0, "格式化失败，正在恢复原文件...")
                 try:
                     shutil.copy2(self.backup_path, self.pdf_path)
                     os.remove(self.backup_path)
-                except:
-                    pass
+                    logger.info("原文件已恢复")
+                except Exception as restore_error:
+                    logger.error(f"恢复备份失败: {str(restore_error)}")
+                    error_detail += f" (备份恢复也失败: {str(restore_error)})"
 
             return {
                 "success": False,
-                "error": f"PDF格式化失败: {str(e)}"
+                "error": error_detail
             }
 
     def _process_page(self, page, target_w_pt: float, target_h_pt: float):
@@ -152,38 +168,49 @@ class PdfResizer:
             新页面对象
         """
         from PyPDF2 import Transformation
+        import copy
 
-        # 获取原页面尺寸
-        orig_w = float(page.mediabox.width)
-        orig_h = float(page.mediabox.height)
+        try:
+            # 获取原页面尺寸
+            orig_w = float(page.mediabox.width)
+            orig_h = float(page.mediabox.height)
 
-        # 计算缩放比例（保持宽高比，不裁剪）
-        scale_w = target_w_pt / orig_w
-        scale_h = target_h_pt / orig_h
-        scale = min(scale_w, scale_h)  # 取较小的比例
+            # 计算缩放比例（保持宽高比，不裁剪）
+            scale_w = target_w_pt / orig_w
+            scale_h = target_h_pt / orig_h
+            scale = min(scale_w, scale_h)  # 取较小的比例
 
-        # 缩放后的实际尺寸
-        scaled_w = orig_w * scale
-        scaled_h = orig_h * scale
+            # 缩放后的实际尺寸
+            scaled_w = orig_w * scale
+            scaled_h = orig_h * scale
 
-        # 计算居中偏移
-        offset_x = (target_w_pt - scaled_w) / 2
-        offset_y = (target_h_pt - scaled_h) / 2
+            # 计算居中偏移
+            offset_x = (target_w_pt - scaled_w) / 2
+            offset_y = (target_h_pt - scaled_h) / 2
 
-        # 创建新页面（目标尺寸，白色背景）
-        new_page = PageObject.create_blank_page(
-            width=target_w_pt,
-            height=target_h_pt
-        )
+            # 创建新页面（目标尺寸，白色背景）
+            new_page = PageObject.create_blank_page(
+                width=target_w_pt,
+                height=target_h_pt
+            )
 
-        # 创建变换：先缩放，再平移
-        transformation = Transformation().scale(scale, scale).translate(offset_x, offset_y)
+            # 复制原页面以避免修改原对象
+            page_copy = copy.copy(page)
 
-        # 应用变换并合并页面
-        page.add_transformation(transformation)
-        new_page.merge_page(page)
+            # 创建变换：先缩放，再平移
+            transformation = Transformation().scale(scale, scale).translate(offset_x, offset_y)
 
-        return new_page
+            # 应用变换
+            page_copy.add_transformation(transformation)
+
+            # 合并页面
+            new_page.merge_page(page_copy)
+
+            return new_page
+
+        except Exception as e:
+            logger.error(f"页面处理失败: {str(e)}")
+            raise Exception(f"页面缩放失败: {str(e)}")
 
     def _backup_file(self) -> str:
         """
