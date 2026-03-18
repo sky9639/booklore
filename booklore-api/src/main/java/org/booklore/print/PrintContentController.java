@@ -108,6 +108,12 @@ public class PrintContentController {
                 return ResponseEntity.notFound().build();
             }
 
+            // 获取书名（如果有metadata）
+            String filename = "book.pdf";
+            if (book.getMetadata() != null && book.getMetadata().getTitle() != null) {
+                filename = book.getMetadata().getTitle() + ".pdf";
+            }
+
             InputStreamResource resource = new InputStreamResource(
                 new FileInputStream(pdfFile)
             );
@@ -115,7 +121,7 @@ public class PrintContentController {
             return ResponseEntity.ok()
                 .header(
                     HttpHeaders.CONTENT_DISPOSITION,
-                    "inline; filename=\"" + book.getName() + ".pdf\""
+                    "inline; filename=\"" + filename + "\""
                 )
                 .contentLength(pdfFile.length())
                 .contentType(MediaType.APPLICATION_PDF)
