@@ -812,12 +812,17 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
           this.resizing = false;
           this.resizeProgress = 100;
 
-          this.addResizeLog('✓ 完成');
-          if (data.new_size) {
-            this.addResizeLog(`新尺寸: ${data.new_size.width_mm}×${data.new_size.height_mm}mm`);
+          // 检查是否跳过（已经是目标尺寸）
+          if (data.skipped) {
+            this.addResizeLog('✓ 已是目标尺寸，跳过');
+            alert(data.message || 'PDF已经是目标尺寸，无需格式化');
+          } else {
+            this.addResizeLog('✓ 完成');
+            if (data.new_size) {
+              this.addResizeLog(`新尺寸: ${data.new_size.width_mm}×${data.new_size.height_mm}mm`);
+            }
+            alert('PDF格式化完成！');
           }
-
-          alert('PDF格式化完成！');
 
           // 刷新PDF尺寸信息
           setTimeout(() => {

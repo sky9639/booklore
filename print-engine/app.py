@@ -295,12 +295,18 @@ def _run_pdf_resize_task(task_id: str, book_path: str, target_size: str):
 
         with _pdf_resize_tasks_lock:
             if result["success"]:
-                _pdf_resize_tasks[task_id] = {
+                task_data = {
                     "status": "done",
                     "progress": 100,
-                    "stage": "格式化完成！",
+                    "stage": result.get("message", "格式化完成！"),
                     "new_size": result["new_size"]
                 }
+                # 如果是跳过的情况，添加skipped标记
+                if result.get("skipped"):
+                    task_data["skipped"] = True
+                    task_data["message"] = result.get("message", "PDF已经是目标尺寸")
+
+                _pdf_resize_tasks[task_id] = task_data
             else:
                 _pdf_resize_tasks[task_id] = {
                     "status": "error",

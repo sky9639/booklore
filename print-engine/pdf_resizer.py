@@ -57,7 +57,8 @@ class PdfResizer:
             {
                 "success": True/False,
                 "new_size": {"width_mm": 210, "height_mm": 297},
-                "error": "错误信息"
+                "error": "错误信息",
+                "skipped": True/False  # 是否因为已是目标尺寸而跳过
             }
         """
         try:
@@ -66,7 +67,32 @@ class PdfResizer:
             if not os.path.exists(self.pdf_path):
                 raise Exception("PDF文件不存在")
 
-            # 2. 备份原文件
+            # 2. 检查当前PDF尺寸是否已经是目标尺寸
+            self.emit_progress(8, "正在检测PDF尺寸...")
+            reader = PdfReader(self.pdf_path, strict=False)
+            if len(reader.pages) == 0:
+                raise Exception("PDF文件为空，没有页面")
+
+            first_page = reader.pages[0]
+            current_w_mm = float(first_page.mediabox.width) * 25.4 / 72
+            current_h_mm = float(first_page.mediabox.height) * 25.4 / 72
+
+            target_w_mm, target_h_mm = STANDARD_SIZES[self.target_size]
+
+            # 容差2mm
+            if abs(current_w_mm - target_w_mm) <= 2 and abs(current_h_mm - target_h_mm) <= 2:
+                logger.info(f"PDF已经是{self.target_size}尺寸({current_w_mm:.1f}x{current_h_mm:.1f}mm)，无需格式化")
+                return {
+                    "success": True,
+                    "skipped": True,
+                    "new_size": {
+                        "width_mm": target_w_mm,
+                        "height_mm": target_h_mm
+                    },
+                    "message": f"PDF已经是{self.target_size}尺寸，无需格式化"
+                }
+
+            # 3. 备份原文件
             self.emit_progress(10, "正在备份原文件...")
             self.backup_path = self._backup_file()
 
@@ -79,9 +105,6 @@ class PdfResizer:
                 raise Exception(f"无法读取PDF文件: {str(e)}")
 
             total_pages = len(reader.pages)
-
-            if total_pages == 0:
-                raise Exception("PDF文件为空，没有页面")
 
             # 4. 创建新PDF（使用compress=False避免对象引用问题）
             self.emit_progress(20, "正在创建新PDF...")
