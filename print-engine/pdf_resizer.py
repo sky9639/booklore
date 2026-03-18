@@ -151,6 +151,8 @@ class PdfResizer:
         Returns:
             新页面对象
         """
+        from PyPDF2 import Transformation
+
         # 获取原页面尺寸
         orig_w = float(page.mediabox.width)
         orig_h = float(page.mediabox.height)
@@ -174,11 +176,12 @@ class PdfResizer:
             height=target_h_pt
         )
 
-        # 缩放原页面
-        page.scale_by(scale)
+        # 创建变换：先缩放，再平移
+        transformation = Transformation().scale(scale, scale).translate(offset_x, offset_y)
 
-        # 将缩放后的页面合并到新页面（居中）
-        new_page.merge_translated_page(page, offset_x, offset_y)
+        # 应用变换并合并页面
+        page.add_transformation(transformation)
+        new_page.merge_page(page)
 
         return new_page
 
