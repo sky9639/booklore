@@ -1,10 +1,22 @@
 """
 PDF信息获取模块
 用于获取电子书PDF的尺寸、页数等信息
+
+版本：V1.0
+创建日期：2026-03-18
+功能：
+  - 检测PDF实际物理尺寸（mm）
+  - 判断页面方向（竖向/横向/正方形）
+  - 检测混合尺寸页面
+  - 获取页数和文件大小
 """
 
 import os
+import logging
 from PyPDF2 import PdfReader
+
+# 配置日志
+logger = logging.getLogger(__name__)
 
 
 def get_pdf_info(book_path: str) -> dict:
@@ -43,8 +55,8 @@ def get_pdf_info(book_path: str) -> dict:
         }
 
     try:
-        # 读取PDF
-        reader = PdfReader(pdf_path)
+        # 读取PDF（使用strict=False容忍格式错误）
+        reader = PdfReader(pdf_path, strict=False)
 
         if len(reader.pages) == 0:
             return {
@@ -54,8 +66,23 @@ def get_pdf_info(book_path: str) -> dict:
 
         # 获取第一页尺寸
         first_page = reader.pages[0]
-        width_pt = float(first_page.mediabox.width)
-        height_pt = float(first_page.mediabox.height)
+
+        try:
+            width_pt = float(first_page.mediabox.width)
+            height_pt = float(first_page.mediabox.height)
+        except (ValueError, AttributeError) as e:
+            logger.error(f"无法读取页面尺寸: {e}")
+            return {
+                "success": False,
+                "error": "无法读取页面尺寸"
+            }
+
+        # 验证尺寸有效性
+        if width_pt <= 0 or height_pt <= 0:
+            return {
+                "success": False,
+                "error": f"页面尺寸无效: {width_pt}x{height_pt}pt"
+            }
 
         # 转换为毫米（1英寸 = 72点 = 25.4毫米）
         width_mm = round(width_pt * 25.4 / 72, 1)
@@ -69,18 +96,29 @@ def get_pdf_info(book_path: str) -> dict:
         else:
             orientation = "square"
 
-        # 检查是否有混合尺寸（容差2点）
+        # 检查是否有混合尺寸（容差2点，避免浮点误差）
         has_mixed_sizes = False
-        for page in reader.pages[1:]:
-            pw = float(page.mediabox.width)
-            ph = float(page.mediabox.height)
-            if abs(pw - width_pt) > 2 or abs(ph - height_pt) > 2:
-                has_mixed_sizes = True
-                break
+        tolerance = 2.0  # 点
+
+        try:
+            for page in reader.pages[1:]:
+                pw = float(page.mediabox.width)
+                ph = float(page.mediabox.height)
+                if abs(pw - width_pt) > tolerance or abs(ph - height_pt) > tolerance:
+                    has_mixed_sizes = True
+                    break
+        except Exception as e:
+            # 混合尺寸检测失败不影响主要功能
+            logger.warning(f"混合尺寸检测失败: {e}")
+            has_mixed_sizes = False
 
         # 获取文件大小
-        file_size_bytes = os.path.getsize(pdf_path)
-        file_size_mb = round(file_size_bytes / 1024 / 1024, 2)
+        try:
+            file_size_bytes = os.path.getsize(pdf_path)
+            file_size_mb = round(file_size_bytes / (1024 * 1024), 2)
+        except OSError as e:
+            logger.warning(f"获取文件大小失败: {e}")
+            file_size_mb = 0.0
 
         return {
             "success": True,
@@ -95,6 +133,7 @@ def get_pdf_info(book_path: str) -> dict:
         }
 
     except Exception as e:
+        logger.error(f"读取PDF失败: {e}", exc_info=True)
         return {
             "success": False,
             "error": f"读取PDF失败: {str(e)}"
