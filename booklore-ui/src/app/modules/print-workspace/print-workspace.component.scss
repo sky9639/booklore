@@ -1,30 +1,15 @@
 /*
 ============================================================
 Booklore Print Workspace
-版本：V1.9
+版本：V2.0
 
-修复内容（相较 V1.8）：
+更新内容（相较 V1.9）：
 
-1 [问题3] 左侧垂直标尺离图片太近
-  - ruler-v 宽度从 20px 加大到 44px，数值有足够空间。
-  - ruler-val-v 加 padding，确保 mm 单位不被裁切。
-
-2 [问题4] 顶部标题重新设计
-  - 英文主标题字号加大，加入渐变色、字间距、装饰竖线。
-  - 中文副标题加入胶囊背景标签样式。
-  - 整体更大气，层次更清晰。
-
-3 [问题5] 返回图书墙按钮颜色修复
-  - 旧版 secondary 颜色过深（#1e4a9e），视觉上几乎是黑色。
-  - 新版改为与主按钮同色系的亮蓝，仅用 outline 风格区分。
-
-4 [问题6] A4 书脊标尺超长优化
-  - 书脊页（A4 第二页）预览图宽度极窄，标尺会严重超出。
-  - 对 .preview-page-wrapper 增加 max-width 限制，
-    同时 .ruler-h 加 overflow:hidden + min-width:0，
-    数值超出时自动截断不溢出。
-  - 书脊 wrapper 额外加 .spine-page class，
-    ruler-val-h 改为绝对定位居中，始终在框内显示。
+1 [功能] PDF格式化进度优化
+  - 重构进度显示：主进度条 + 阶段文本 + 统计信息 三层结构
+  - 统计信息独立一行，小号字体，图标+数字，视觉更清晰
+  - 日志区域精简为最多5条关键节点，避免刷屏
+  - 日志行增加淡��动画，根据内容自动高亮（双页蓝、完成绿、错误红）
 
 ============================================================
 */
@@ -319,6 +304,9 @@ Booklore Print Workspace
   }
 }
 
+/* =========================================================
+   PDF格式化区域样式
+========================================================= */
 .resize-section {
   display: flex;
   flex-direction: column;
@@ -357,12 +345,15 @@ Booklore Print Workspace
   }
 }
 
+/* 进度条容器 */
 .resize-progress {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  padding: 8px 0;
 }
 
+/* 进度条本体 */
 .progress-bar {
   width: 100%;
   height: 6px;
@@ -379,41 +370,117 @@ Booklore Print Workspace
   border-radius: 3px;
 }
 
-.progress-text {
-  font-size: 11px;
-  color: #8ea3bf;
+/* 主进度文本（一行，正常大小） */
+.progress-text-main {
+  font-size: 12px;
+  color: #c9d1d9;
   text-align: center;
+  font-weight: 500;
+  line-height: 1.4;
 }
 
-.resize-logs {
+/* 统计信息行（单独一行，小号，图标+数字） */
+.progress-stats {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 10px;
+  color: #8ea3bf;
+  padding: 4px 0;
+  border-top: 1px solid #1a2f4a;
+  margin-top: 2px;
+
+  .stat-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 500;
+
+    i {
+      font-size: 10px;
+    }
+
+    &.stat-double {
+      color: #58a6ff;
+    }
+
+    &.stat-single {
+      color: #79c0ff;
+    }
+
+    &.stat-error {
+      color: #f85149;
+    }
+  }
+
+  .stat-divider {
+    color: #30363d;
+    font-weight: 300;
+  }
+}
+
+/* 日志区域（无边框、无滚动条、直接融入卡片背景） */
+.resize-logs-inline {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  margin-top: 6px;
-  max-height: 100px;
-  overflow-y: auto;
-
-  &::-webkit-scrollbar {
-    width: 3px;
-  }
-
-  &::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  &::-webkit-scrollbar-thumb {
-    background: #2c3e55;
-    border-radius: 2px;
-  }
+  gap: 3px;
+  margin-top: 12px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  max-height: none; /* 不限制高度，完全展开 */
+  overflow: visible; /* 不出现滚动条 */
 }
 
 .log-line {
-  font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 13px;
-  line-height: 1.3;
-  color: #8ea3bf;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #7d8590;
   word-wrap: break-word;
   word-break: break-all;
+  padding: 3px 0;
+  opacity: 0.9;
+
+  /* 日志行淡入动画 */
+  animation: logFadeIn 0.3s ease-in;
+
+  /* 特殊标记高亮 */
+  &:has(✂️), &:has(双页) {
+    color: #58a6ff;
+    font-weight: 500;
+  }
+
+  &:has(✓), &:has(✅), &:has(完成) {
+    color: #3fb950;
+    font-weight: 500;
+  }
+
+  &:has(❌), &:has(错误), &:has(失败) {
+    color: #f85149;
+    font-weight: 500;
+  }
+
+  &:has(⏳), &:has(处理), &:has(格式化) {
+    color: #8ea3bf;
+  }
+
+  &:has(📊), &:has(统计) {
+    color: #79c0ff;
+    font-weight: 500;
+  }
+}
+
+@keyframes logFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 0.9;
+    transform: translateY(0);
+  }
 }
 
 /* =========================================================

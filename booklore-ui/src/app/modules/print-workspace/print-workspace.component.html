@@ -73,17 +73,38 @@
           {{ resizing ? '格式化中...' : '格式化PDF' }}
         </button>
 
+        <!-- 进度条区域 -->
         <div class="resize-progress" *ngIf="resizing">
+          <!-- 主进度条 -->
           <div class="progress-bar">
             <div class="progress-fill" [style.width.%]="resizeProgress"></div>
           </div>
-          <div class="progress-text">{{ resizeProgress }}% - {{ resizeStage }}</div>
-        </div>
 
-        <!-- 精简日志 -->
-        <div class="resize-logs" *ngIf="resizeLogs.length > 0">
-          <div class="log-line" *ngFor="let log of resizeLogs">{{ log }}</div>
+          <!-- 主进度文本（一行） -->
+          <div class="progress-text-main">
+            {{ resizeProgress }}% - {{ resizeStage }}
+          </div>
+
+          <!-- 统计信息（单独一行，小号） -->
+          <div class="progress-stats" *ngIf="resizeDoubleCount > 0 || resizeSingleCount > 0">
+            <span class="stat-item stat-double">
+              <i class="pi pi-clone"></i> 双页 {{ resizeDoubleCount }}
+            </span>
+            <span class="stat-divider">|</span>
+            <span class="stat-item stat-single">
+              <i class="pi pi-file"></i> 单页 {{ resizeSingleCount }}
+            </span>
+            <span class="stat-item stat-error" *ngIf="resizeErrorCount > 0">
+              <span class="stat-divider">|</span>
+              <i class="pi pi-exclamation-triangle"></i> 错误 {{ resizeErrorCount }}
+            </span>
+          </div>
         </div>
+      </div>
+
+      <!-- 格式化日志（直接显示在卡片底部，无边框，无滚动条） -->
+      <div class="resize-logs-inline" *ngIf="resizeLogs.length > 0">
+        <div class="log-line" *ngFor="let log of resizeLogs">{{ log }}</div>
       </div>
     </ng-container>
   </div>

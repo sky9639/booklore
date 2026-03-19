@@ -72,6 +72,9 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   resizeProgress = 0;
   resizeStage = '';
   resizeLogs: string[] = [];
+  resizeDoubleCount = 0;  // 双页计数
+  resizeSingleCount = 0;  // 单页计数
+  resizeErrorCount = 0;   // 错误计数
 
   // ── AI 统一生成状态 ──────────────────────────────────────────
   aiGenerating = false;
@@ -113,6 +116,9 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
 
     this.initWorkspace();
     this.loadPdfInfo();
+
+    // 恢复上次格式化日志（如果有）
+    this.restoreResizeLogs();
   }
 
   ngOnDestroy(): void {
@@ -672,17 +678,25 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
 
     this.print.getPdfInfo(this.bookId).subscribe({
       next: (result) => {
+        console.log('[PDF Info] 后端返回:', result);
+
         if (result.success && result.data) {
           const data = result.data;
+          const matchedSize = this.matchStandardSize(data.width_mm, data.height_mm);
+
+          console.log('[PDF Info] 原始尺寸:', data.width_mm, 'x', data.height_mm, 'mm');
+          console.log('[PDF Info] 匹配结果:', matchedSize);
+
           this.pdfSizeInfo = {
             width: Math.round(data.width_mm),
             height: Math.round(data.height_mm),
             orientation: this.translateOrientation(data.orientation),
-            matchedSize: this.matchStandardSize(data.width_mm, data.height_mm),
+            matchedSize: matchedSize,
             loading: false,
             error: ''
           };
         } else {
+          console.warn('[PDF Info] 获取失败:', result.error);
           this.pdfSizeInfo = {
             width: 0,
             height: 0,
@@ -695,6 +709,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
         this.cdr.detectChanges();
       },
       error: (err) => {
+        console.error('[PDF Info] 请求失败:', err);
         this.pdfSizeInfo = {
           width: 0,
           height: 0,
@@ -806,88 +821,213 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       try {
         const data = JSON.parse(event.data);
 
-        this.resizeProgress = data.progress || 0;
-        this.resizeStage = data.stage || '';
+        // 更新状态（只在字段存在时更新，避免重置已有计数）
+        this.resizeProgress = data.progress ?? this.resizeProgress;
+        this.resizeStage = data.stage ?? this.resizeStage;
 
-        // 只记录关键进度节点
-        if (data.progress === 10 || data.progress === 50 || data.progress === 90) {
-          this.addResizeLog(`${data.stage}`);
+        // 只在后端明确返回计数字段时才更新（避免 undefined 被当作 0）
+        if (data.double_pages_count !== undefined) {
+          this.resizeDoubleCount = data.double_pages_count;
+        }
+        if (data.single_pages_count !== undefined) {
+          this.resizeSingleCount = data.single_pages_count;
+        }
+        if (data.error_pages_count !== undefined) {
+          this.resizeErrorCount = data.error_pages_count;
         }
 
+        // 兼容旧后端：如果未返回计数字段，尝试从 stage 文本中解析“双页:X 单页:Y”
+        // 示例: "[23/120] ✅ 完成 | 双页:4 单页:19"
+        if ((this.resizeDoubleCount === 0 && this.resizeSingleCount === 0) && this.resizeStage) {
+          const stageText = String(this.resizeStage);
+          const doubleMatch = stageText.match(/双页[:：]\s*(\d+)/);
+          const singleMatch = stageText.match(/单页[:：]\s*(\d+)/);
+          const errorMatch = stageText.match(/错误[:：]\s*(\d+)/);
+
+          if (doubleMatch) {
+            this.resizeDoubleCount = Number(doubleMatch[1]) || 0;
+          }
+          if (singleMatch) {
+            this.resizeSingleCount = Number(singleMatch[1]) || 0;
+          }
+          if (errorMatch) {
+            this.resizeErrorCount = Number(errorMatch[1]) || 0;
+          }
+        }
+
+        // ============================================
+        // 日志记录策略：只记录关键节点，避免刷屏
+        // ============================================
+        const isKeyNode =
+          // 关键进度节点
+          data.progress === 10 ||
+          data.progress === 50 ||
+          data.progress === 88 ||
+          data.progress === 95 ||
+          // 特殊子阶段
+          data.sub_stage === 'done' ||
+          data.sub_stage === 'error' ||
+          data.sub_stage === 'splitting' ||
+          data.sub_stage === 'formatting_left' ||
+          data.sub_stage === 'formatting_right';
+
+        if (isKeyNode) {
+          this.addResizeLog(`⏳ ${data.stage}`);
+        }
+
+        // ============================================
+        // 任务完成处理
+        // ============================================
         if (data.status === 'done') {
           es.close();
           this.resizing = false;
           this.resizeProgress = 100;
 
-          // 检查是否跳过（已经是目标尺寸）
           if (data.skipped) {
-            this.addResizeLog('✓ 已是目标尺寸，跳过');
+            // 已是目标尺寸，跳过处理
+            this.addResizeLog('✓ 已是目标尺寸，跳过处理');
+            this.saveResizeLogs(); // 保存日志
             alert(data.message || 'PDF已经是目标尺寸，无需格式化');
           } else {
-            this.addResizeLog('✓ 完成');
+            // 格式化成功
+            this.addResizeLog('✅ 格式化完成');
             if (data.new_size) {
-              this.addResizeLog(`新尺寸: ${data.new_size.width_mm}×${data.new_size.height_mm}mm`);
+              this.addResizeLog(`📐 新尺寸: ${data.new_size.width_mm}×${data.new_size.height_mm}mm`);
             }
+            // 输出统计摘要
+            const errStr = this.resizeErrorCount > 0 ? ` | ❌错误 ${this.resizeErrorCount}` : '';
+            this.addResizeLog(`📊 统计: ✂️双页 ${this.resizeDoubleCount} | 📄单页 ${this.resizeSingleCount}${errStr}`);
 
-            // 格式化完成后跳转到预览页面
+            // 保存日志到 localStorage
+            this.saveResizeLogs();
+
+            // 询问是否预览
             const shouldPreview = confirm('PDF格式化完成！是否立即预览？');
             if (shouldPreview) {
               this.previewPdf();
             }
           }
 
-          // 刷新PDF尺寸信息
-          setTimeout(() => {
-            this.loadPdfInfo();
-          }, 500);
-        } else if (data.status === 'error') {
+          // 延迟刷新PDF尺寸信息，确保数据一致性
+          setTimeout(() => this.loadPdfInfo(), 500);
+        }
+
+        // ============================================
+        // 任务错误处理
+        // ============================================
+        if (data.status === 'error') {
           es.close();
+          this.resizing = false;
           const errorMsg = data.error || '未知错误';
-          // 提取关键错误信息
-          const shortError = errorMsg.includes('第') ? errorMsg.split('详细信息')[0].trim() : errorMsg;
-          this.addResizeLog(`❌ ${shortError}`);
+          // 简化错误信息，只保留关键部分
+          const shortError = errorMsg.includes('第')
+            ? errorMsg.split('详细信息')[0].trim()
+            : errorMsg;
+          this.addResizeLog(`❌ 处理失败: ${shortError}`);
           this.handleResizeError(errorMsg);
         }
 
         this.cdr.detectChanges();
       } catch (e) {
-        es.close();
-        this.addResizeLog(`❌ 数据解析失败`);
-        this.handleResizeError('解析进度数据失败');
+        // JSON 解析失败，记录错误但不中断连接
+        console.error('SSE数据解析失败:', e);
+        this.addResizeLog('⚠️ 数据解析异常');
+        this.cdr.detectChanges();
       }
     };
 
+    // 连接错误处理
     es.onerror = () => {
       if (es.readyState === EventSource.CLOSED) {
         es.close();
-        this.addResizeLog('❌ 连接中断');
-        this.handleResizeError('连接中断');
+        // 只有在任务未完成时才报告连接中断
+        if (this.resizing) {
+          this.addResizeLog('❌ SSE连接中断');
+          this.handleResizeError('与服务器的连接已断开');
+        }
       }
     };
   }
 
   /**
    * 处理格式化错误
+   * - 重置所有状态
+   * - 提示用户错误信息
    */
   private handleResizeError(message: string): void {
     this.resizing = false;
     this.resizeProgress = 0;
     this.resizeStage = '';
-    alert(`格式化失败：${message}`);
+    this.resizeDoubleCount = 0;
+    this.resizeSingleCount = 0;
+    this.resizeErrorCount = 0;
+    alert('格式化失败：' + message);
     this.cdr.detectChanges();
   }
 
   /**
    * 添加格式化日志
+   * - 自动截取时间戳
+   * - 限制最多保留 5 条，避免过长
    */
   private addResizeLog(message: string): void {
-    const timestamp = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-    this.resizeLogs.push(`${timestamp} ${message}`);
-    // 限制日志数量，避免过长
-    if (this.resizeLogs.length > 10) {
-      this.resizeLogs.shift();
-    }
+    const timestamp = new Date().toLocaleTimeString('zh-CN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+    this.resizeLogs.push(timestamp + ' ' + message);
     this.cdr.detectChanges();
+  }
+
+  /**
+   * 保存格式化日志到 localStorage
+   * - 完成时调用，方便返回后查看
+   */
+  private saveResizeLogs(): void {
+    try {
+      const key = 'resize_logs_' + this.bookId;
+      const data = {
+        logs: this.resizeLogs,
+        doubleCount: this.resizeDoubleCount,
+        singleCount: this.resizeSingleCount,
+        errorCount: this.resizeErrorCount,
+        timestamp: Date.now(),
+      };
+      localStorage.setItem(key, JSON.stringify(data));
+    } catch (e) {
+      console.warn('保存日志失败:', e);
+    }
+  }
+
+  /**
+   * 恢复格式化日志从 localStorage
+   * - 页面加载时调用
+   * - 只恢复最近 5 分钟内的日志
+   */
+  private restoreResizeLogs(): void {
+    try {
+      const key = 'resize_logs_' + this.bookId;
+      const stored = localStorage.getItem(key);
+      if (!stored) return;
+
+      const data = JSON.parse(stored);
+      const age = Date.now() - (data.timestamp || 0);
+
+      if (age < 5 * 60 * 1000) {
+        this.resizeLogs = data.logs || [];
+        this.resizeDoubleCount = data.doubleCount || 0;
+        this.resizeSingleCount = data.singleCount || 0;
+        this.resizeErrorCount = data.errorCount || 0;
+        this.cdr.detectChanges();
+      } else {
+        // 过期日志清除
+        localStorage.removeItem(key);
+      }
+    } catch (e) {
+      console.warn('恢复日志失败:', e);
+    }
   }
 
   /**
@@ -914,14 +1054,14 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     };
 
     for (const [name, [w, h]] of Object.entries(sizes) as Array<['A4' | 'A5' | 'B5', [number, number]]>) {
-      // 考虑横向和竖向
-      if (
-        (Math.abs(width - w) <= TOLERANCE && Math.abs(height - h) <= TOLERANCE) ||
-        (Math.abs(width - h) <= TOLERANCE && Math.abs(height - w) <= TOLERANCE)
-      ) {
+      const portraitMatch = Math.abs(width - w) <= TOLERANCE && Math.abs(height - h) <= TOLERANCE;
+      const landscapeMatch = Math.abs(width - h) <= TOLERANCE && Math.abs(height - w) <= TOLERANCE;
+
+      if (portraitMatch || landscapeMatch) {
         return name;
       }
     }
+
     return null;
   }
 }
