@@ -2,7 +2,7 @@
 
 import { Injectable } from "@angular/core";
 import { HttpClient } from "@angular/common/http";
-import { Observable } from "rxjs";
+import { Observable, timeout } from "rxjs";
 import { environment } from "../../../../environments/environment";
 import { TrimSize } from "../models/workspace.model";
 
@@ -202,7 +202,9 @@ export class PrintService {
 
   /** 生成 Gemini 展开图（返回临时预览图和初始裁切线） */
   generateSpread(bookId: number | string, request: any): Observable<any> {
-    return this.http.post<any>(`${this.baseUrl}/print/${bookId}/workspace/ai-generate/spread`, request);
+    return this.http
+      .post<any>(`${this.baseUrl}/print/${bookId}/workspace/ai-generate/spread`, request)
+      .pipe(timeout(300000));
   }
 
   /** 保存裁切后的书脊和封底 */

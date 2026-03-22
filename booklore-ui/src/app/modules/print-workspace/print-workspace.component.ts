@@ -95,6 +95,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     spreadWidth: number;
     spreadHeight: number;
     cropLines: { vertical_lines: number[]; horizontal_lines: number[] };
+    sourceCoverUrl: string;
   } | null = null;
 
   get canAiGenerate(): boolean {
@@ -753,12 +754,14 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       vertical?: number[];
       horizontal?: number[];
     };
+    source_cover_filename?: string | null;
   }): {
     imageUrl: string;
     spreadFilename: string;
     spreadWidth: number;
     spreadHeight: number;
     cropLines: { vertical_lines: number[]; horizontal_lines: number[] };
+    sourceCoverUrl: string;
   } {
     const verticalLines = payload.crop_lines?.vertical_lines?.length
       ? payload.crop_lines.vertical_lines
@@ -776,6 +779,9 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
         vertical_lines: verticalLines,
         horizontal_lines: horizontalLines,
       },
+      sourceCoverUrl: payload.source_cover_filename
+        ? this.material.getAssetUrl(this.bookId, 'cover', payload.source_cover_filename)
+        : '',
     };
   }
 
@@ -791,6 +797,19 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     const ws = this.workspace;
     if (!ws) {
       alert('workspace 未初始化');
+      return;
+    }
+
+    const draft = ws.ai_crop_draft;
+    if (draft?.spread_filename) {
+      this.spreadPreview = this.buildSpreadPreview({
+        spread_filename: draft.spread_filename,
+        spread_size: draft.spread_size,
+        crop_lines: draft.crop_lines,
+        source_cover_filename: draft.source_cover_filename,
+      });
+      this.aiCropVisible = true;
+      this.addLog('📝 已打开缓存的展开图草稿', 100, true);
       return;
     }
 
@@ -828,7 +847,9 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       error: (err) => {
         this.aiGenerating = false;
         this.aiLastResult = 'error';
-        this.aiErrorMsg = err.error?.error || '生成失败';
+        this.aiErrorMsg = err.name === 'TimeoutError'
+          ? '生成超时，请稍后重试'
+          : (err.error?.error || '生成失败');
         this.addLog(`❌ 生成失败: ${this.aiErrorMsg}`, 0, true);
         console.error('Gemini 展开图生成失败', err);
       },
@@ -875,16 +896,30 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   closeCrop(): void {
     this.print.discardAiCropDraft(this.bookId).subscribe({
       next: (workspace) => {
-        this.workspaceState.setWorkspace(workspace);
+        const nextWorkspace = { ...(workspace || {}), ai_crop_draft: null };
+        this.workspaceState.setWorkspace(nextWorkspace);
         this.aiCropVisible = false;
         this.spreadPreview = null;
       },
       error: (err) => {
         console.error('丢弃 AI 裁切草稿失败', err);
+
+        const current = this.workspace;
+        if (current) {
+          this.workspaceState.setWorkspace({ ...current, ai_crop_draft: null });
+        }
+
         this.aiCropVisible = false;
         this.spreadPreview = null;
       },
     });
+  }
+
+  /** 关闭裁切弹窗但保留草稿，下次直接继续编辑 */
+  cacheCloseCrop(): void {
+    this.aiCropVisible = false;
+    this.spreadPreview = null;
+    this.addLog('📝 已缓存当前展开图草稿，下次可直接继续编辑', 100, true);
   }
 
   goBookDetail() {

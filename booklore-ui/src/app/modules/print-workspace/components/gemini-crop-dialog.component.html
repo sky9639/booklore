@@ -3,9 +3,9 @@
     <div class="dialog-header">
       <div class="header-copy">
         <div class="dialog-title">调整 AI 生成裁切</div>
-        <div class="dialog-subtitle">关闭会丢弃本次未保存裁切；保存后才真正应用到书脊和封底。</div>
+        <div class="dialog-subtitle">关闭会丢弃未保存裁切。</div>
       </div>
-      <button class="close-btn" (click)="onClose()" aria-label="关闭裁切弹窗">×</button>
+      <button class="close-btn cache-close-btn" (click)="$event.stopPropagation(); onCacheClose()" aria-label="缓存并关闭裁切弹窗">×</button>
     </div>
 
     <div class="dialog-body crop-body">
@@ -22,13 +22,16 @@
           <div class="line-legend">
             <span class="legend-chip vertical">蓝线：封底左 / 共享线 / 书脊右</span>
             <span class="legend-chip horizontal">橙线：上下边界</span>
+            <button class="toggle-reference-btn" (click)="toggleCoverReference()" [title]="showCoverReference ? '返回生成图' : '查看封面参考'">
+              {{ showCoverReference ? '返回生成图' : '查看封面参考' }}
+            </button>
             <button class="reset-zoom-btn" (click)="resetZoom()" title="重置缩放">
               重置视图 ({{ (zoom * 100).toFixed(0) }}%)
             </button>
           </div>
         </div>
 
-        <div class="canvas-shell" (wheel)="onCanvasWheel($event)">
+        <div class="canvas-shell" #canvasShell (wheel)="onCanvasWheel($event)">
           <div
             class="crop-canvas"
             [ngStyle]="getCanvasContainerStyle()"
@@ -38,10 +41,26 @@
               [src]="spreadImageUrl"
               alt="AI 生成展开图"
               class="spread-image"
+              [class.reference-hidden]="showCoverReference"
               [style.width.px]="displayWidth"
               [style.height.px]="displayHeight"
               draggable="false"
             />
+
+            <div
+              class="cover-reference-box"
+              *ngIf="showCoverReference && coverReferenceStyle"
+              [ngStyle]="coverReferenceStyle"
+            >
+              <img
+                *ngIf="sourceCoverUrl"
+                [src]="sourceCoverUrl"
+                alt="原始封面参考"
+                class="cover-reference-image"
+                draggable="false"
+              />
+              <span class="cover-reference-label">原始封面参考</span>
+            </div>
 
             <div
               *ngFor="let line of lines"
@@ -107,7 +126,7 @@
     </div>
 
     <div class="dialog-footer">
-      <div class="footer-tip">关闭后会放弃当前生成结果，下次会重新生成新图。</div>
+      <div class="footer-tip">缓存后下次可直接继续编辑，关闭会丢弃草稿。</div>
       <div class="footer-actions">
         <button class="secondary-btn" (click)="onClose()">关闭（丢弃草稿）</button>
         <button class="primary-btn" (click)="onSave()" [disabled]="saving">

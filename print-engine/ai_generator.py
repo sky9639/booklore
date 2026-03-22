@@ -298,7 +298,7 @@ def test_gemini_connection(config_override: Optional[dict] = None) -> dict:
     url = f"{base_url}{api_path}".replace("{model}", model)
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=timeout, verify=False)
+        response = requests.post(url, headers=headers, json=payload, timeout=timeout)
         if response.ok:
             return {
                 "success": True,
@@ -511,11 +511,18 @@ def crop_gemini_spread(
     if len(vertical) != 4 or len(horizontal) != 2:
         raise ValueError("裁切线数量非法，必须为 4 条垂直线和 2 条水平线")
 
-    x1, x2, x3, x4 = [int(v) for v in vertical]
-    y1, y2 = [int(v) for v in horizontal]
+    x1, x2, x3, x4 = sorted(int(v) for v in vertical)
+    y1, y2 = sorted(int(v) for v in horizontal)
 
     if not (0 <= x1 < x2 < x3 < x4 <= spread.width and 0 <= y1 < y2 <= spread.height):
         raise ValueError("裁切线坐标非法")
+
+    normalized_vertical = [x1, x2, x3, x4]
+    normalized_horizontal = [y1, y2]
+    crop_lines = _normalize_crop_lines({
+        "vertical": normalized_vertical,
+        "horizontal": normalized_horizontal,
+    })
 
     back_raw = spread.crop((x1, y1, x2, y2)).convert("RGB")
     spine_raw = spread.crop((x2, y1, x3, y2)).convert("RGB")
@@ -587,7 +594,6 @@ def _generate_spread_gemini(
         headers=headers,
         json=payload,
         timeout=GEMINI_TIMEOUT,
-        verify=False,
     )
     if not response.ok:
         logger.error("[Gemini Spread] API 错误 %s: %s", response.status_code, response.text[:400])

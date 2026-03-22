@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Input, Output, OnInit, OnDestroy, HostListener, OnChanges, SimpleChanges } from '@angular/core';
+import { Component, EventEmitter, Input, Output, OnInit, OnDestroy, HostListener, OnChanges, SimpleChanges, ViewChild, ElementRef, AfterViewInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
@@ -17,14 +17,18 @@ interface CropLine {
   templateUrl: './gemini-crop-dialog.component.html',
   styleUrls: ['./gemini-crop-dialog.component.scss'],
 })
-export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges {
+export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, AfterViewInit {
   @Input() visible = false;
   @Input() spreadImageUrl = '';
   @Input() spreadWidth = 0;
   @Input() spreadHeight = 0;
+  @Input() sourceCoverUrl = '';
   @Input() initialLines: any = null;
   @Output() save = new EventEmitter<any>();
-  @Output() close = new EventEmitter<void>();
+  @Output() discard = new EventEmitter<void>();
+  @Output() cacheClose = new EventEmitter<void>();
+
+  @ViewChild('canvasShell', { static: false }) canvasShellRef?: ElementRef<HTMLDivElement>;
 
   displayWidth = 0;
   displayHeight = 0;
@@ -59,14 +63,25 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges {
   private sourceImage: HTMLImageElement | null = null;
   private sourceImagePromise: Promise<HTMLImageElement> | null = null;
   private previewRenderToken = 0;
+  private refreshScheduled = false;
 
+  showCoverReference = false;
   saving = false;
 
   private readonly minDisplayGap = 8;
+  coverReferenceStyle: Record<string, string> | null = null;
+
+  constructor() {}
 
   ngOnInit(): void {
     this.syncDisplayMetrics();
     this.initializeLines();
+  }
+
+  ngAfterViewInit(): void {
+    if (this.visible) {
+      this.scheduleVisibleRefresh();
+    }
   }
 
   ngOnDestroy(): void {
@@ -82,13 +97,38 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges {
       this.previewRenderToken++;
     }
 
-    if (changes['visible'] || changes['spreadImageUrl'] || changes['spreadWidth'] || changes['spreadHeight'] || changes['initialLines']) {
-      this.syncDisplayMetrics();
+    if (changes['visible'] || changes['spreadImageUrl'] || changes['spreadWidth'] || changes['spreadHeight'] || changes['initialLines'] || changes['sourceCoverUrl']) {
       if (this.visible) {
-        this.initializeLines();
-        this.updatePreviews();
+        this.scheduleVisibleRefresh();
+      } else {
+        this.coverReferenceStyle = null;
       }
     }
+  }
+
+  @HostListener('window:resize')
+  onWindowResize(): void {
+    if (this.visible) {
+      this.scheduleVisibleRefresh();
+    }
+  }
+
+  private scheduleVisibleRefresh(): void {
+    if (this.refreshScheduled) {
+      return;
+    }
+
+    this.refreshScheduled = true;
+    requestAnimationFrame(() => {
+      this.refreshScheduled = false;
+      if (!this.visible) {
+        return;
+      }
+
+      this.syncDisplayMetrics();
+      this.initializeLines();
+      this.updatePreviews();
+    });
   }
 
   private syncDisplayMetrics(): void {
@@ -99,18 +139,22 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges {
       return;
     }
 
-    // 获取可用画布区域（canvas-shell 的实际尺寸）
-    // 假设 canvas-shell 占据大部分对话框宽度，预留右侧预览区域
-    const availableWidth = Math.max(window.innerWidth * 0.6, 800);  // 至少800px
-    const availableHeight = Math.max(window.innerHeight * 0.7, 600); // 至少600px
+    let availableWidth = 800;
+    let availableHeight = 600;
 
-    // 计算缩放比例，确保展开图铺满画布
+    if (this.canvasShellRef?.nativeElement) {
+      const rect = this.canvasShellRef.nativeElement.getBoundingClientRect();
+      availableWidth = Math.max(rect.width - 40, 400);
+      availableHeight = Math.max(rect.height - 40, 400);
+    } else {
+      availableWidth = Math.max(window.innerWidth * 0.6, 800);
+      availableHeight = Math.max(window.innerHeight * 0.7, 600);
+    }
+
     const scaleX = availableWidth / this.spreadWidth;
     const scaleY = availableHeight / this.spreadHeight;
 
-    // 使用较小的缩放比例，确保完整显示，但不限制最大为1
     this.scale = Math.min(scaleX, scaleY);
-
     this.displayWidth = Math.round(this.spreadWidth * this.scale);
     this.displayHeight = Math.round(this.spreadHeight * this.scale);
   }
@@ -134,6 +178,12 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges {
     ];
 
     this.frontRightBoundary = Math.round(vLines[3] * this.scale);
+    this.coverReferenceStyle = {
+      left: `${Math.round(vLines[2] * this.scale)}px`,
+      top: `${Math.round(hLines[0] * this.scale)}px`,
+      width: `${Math.max(Math.round((vLines[3] - vLines[2]) * this.scale), 1)}px`,
+      height: `${Math.max(Math.round((hLines[1] - hLines[0]) * this.scale), 1)}px`,
+    };
 
     this.lines = [
       { id: 'v1', type: 'vertical', position: Math.round(vLines[0] * this.scale), label: '封底左边界', shortLabel: '封底左' },
@@ -144,6 +194,10 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges {
     ];
 
     this.normalizeLinePositions();
+  }
+
+  toggleCoverReference(): void {
+    this.showCoverReference = !this.showCoverReference;
   }
 
   getLineStyle(line: CropLine): any {
@@ -243,9 +297,11 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges {
     const line = this.lines.find((l) => l.id === this.draggingLineId);
     if (!line) return;
 
-    const nextPosition = line.type === 'vertical'
-      ? this.dragStartPosition + (event.clientX - this.dragStartX)
-      : this.dragStartPosition + (event.clientY - this.dragStartY);
+    const delta = line.type === 'vertical'
+      ? (event.clientX - this.dragStartX) / this.zoom
+      : (event.clientY - this.dragStartY) / this.zoom;
+
+    const nextPosition = this.dragStartPosition + delta;
 
     this.setLinePosition(line, nextPosition);
     this.updatePreviews();
@@ -313,32 +369,15 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges {
       return Math.max(top + this.minDisplayGap, Math.min(this.displayHeight, nextPosition));
     }
 
-    const left = this.lines.find((item) => item.id === 'v1')?.position ?? 0;
-    const middle = this.lines.find((item) => item.id === 'v2')?.position ?? Math.round(this.displayWidth / 2);
-    const right = this.lines.find((item) => item.id === 'v3')?.position ?? this.displayWidth;
-    const maxRight = Math.min(this.frontRightBoundary - this.minDisplayGap, this.displayWidth);
-
-    if (line.id === 'v1') {
-      return Math.max(0, Math.min(middle - this.minDisplayGap, nextPosition));
-    }
-    if (line.id === 'v2') {
-      return Math.max(left + this.minDisplayGap, Math.min(right - this.minDisplayGap, nextPosition));
-    }
-    return Math.max(middle + this.minDisplayGap, Math.min(maxRight, nextPosition));
+    return Math.max(0, Math.min(this.displayWidth, nextPosition));
   }
 
   private normalizeLinePositions(): void {
-    const v1 = this.lines.find((line) => line.id === 'v1');
-    const v2 = this.lines.find((line) => line.id === 'v2');
-    const v3 = this.lines.find((line) => line.id === 'v3');
     const h1 = this.lines.find((line) => line.id === 'h1');
     const h2 = this.lines.find((line) => line.id === 'h2');
 
-    if (v1 && v2 && v3) {
-      const maxRight = Math.min(this.frontRightBoundary - this.minDisplayGap, this.displayWidth);
-      v1.position = Math.max(0, Math.min(v1.position, maxRight - this.minDisplayGap * 2));
-      v2.position = Math.max(v1.position + this.minDisplayGap, Math.min(v2.position, maxRight - this.minDisplayGap));
-      v3.position = Math.max(v2.position + this.minDisplayGap, Math.min(v3.position, maxRight));
+    for (const line of this.lines.filter((item) => item.type === 'vertical')) {
+      line.position = Math.max(0, Math.min(this.displayWidth, line.position));
     }
 
     if (h1 && h2) {
@@ -347,16 +386,29 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges {
     }
   }
 
+  private getOrderedCropBounds(): { verticalLines: number[]; horizontalLines: number[] } {
+    const editableVerticalLines = this.lines
+      .filter((line) => line.type === 'vertical')
+      .map((line) => line.position);
+
+    const horizontalLines = this.lines
+      .filter((line) => line.type === 'horizontal')
+      .map((line) => line.position)
+      .sort((a, b) => a - b);
+
+    const verticalLines = [...editableVerticalLines, this.frontRightBoundary]
+      .map((value) => Math.max(0, Math.min(this.displayWidth, value)))
+      .sort((a, b) => a - b);
+
+    return { verticalLines, horizontalLines };
+  }
+
   private getSaveLines(): { vertical_lines: number[]; horizontal_lines: number[] } {
-    const v1 = this.lines.find((line) => line.id === 'v1')?.position ?? 0;
-    const v2 = this.lines.find((line) => line.id === 'v2')?.position ?? 0;
-    const v3 = this.lines.find((line) => line.id === 'v3')?.position ?? 0;
-    const h1 = this.lines.find((line) => line.id === 'h1')?.position ?? 0;
-    const h2 = this.lines.find((line) => line.id === 'h2')?.position ?? 0;
+    const { verticalLines, horizontalLines } = this.getOrderedCropBounds();
 
     return {
-      vertical_lines: [v1, v2, v3, this.frontRightBoundary].map((value) => Math.round(value / this.scale)),
-      horizontal_lines: [h1, h2].map((value) => Math.round(value / this.scale)),
+      vertical_lines: verticalLines.map((value) => Math.round(value / this.scale)),
+      horizontal_lines: horizontalLines.map((value) => Math.round(value / this.scale)),
     };
   }
 
@@ -416,20 +468,32 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges {
   }
 
   onClose(): void {
+    this.resetInteractionState(true);
+    this.discard.emit();
+  }
+
+  onCacheClose(): void {
+    const confirmed = confirm('缓存当前结果，下次可直接继续编辑。');
+    if (!confirmed) return;
+
+    this.resetInteractionState(false);
+    this.cacheClose.emit();
+  }
+
+  private resetInteractionState(clearPreviews: boolean): void {
     this.onDocumentMouseUp();
     this.onStopPanning();
-    this.revokePreviewUrls();
+    if (clearPreviews) {
+      this.revokePreviewUrls();
+    }
     this.selectedLineId = null;
     this.draggingLineId = null;
     this.zoom = 1.0;
     this.panX = 0;
     this.panY = 0;
-    this.close.emit();
+    this.showCoverReference = false;
   }
 
-  /**
-   * 滚轮缩放
-   */
   onCanvasWheel(event: WheelEvent): void {
     event.preventDefault();
     event.stopPropagation();

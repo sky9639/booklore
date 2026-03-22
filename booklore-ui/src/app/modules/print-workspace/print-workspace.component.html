@@ -510,8 +510,10 @@
   [spreadWidth]="spreadPreview?.spreadWidth || 0"
   [spreadHeight]="spreadPreview?.spreadHeight || 0"
   [initialLines]="spreadPreview?.cropLines || null"
+  [sourceCoverUrl]="spreadPreview?.sourceCoverUrl || ''"
   (save)="onCropSave($event)"
-  (close)="closeCrop()"
+  (discard)="closeCrop()"
+  (cacheClose)="cacheCloseCrop()"
 ></app-gemini-crop-dialog>
 
 <!-- ===================== [V1.8 问题1] Lightbox 遮罩层 ===================== -->
