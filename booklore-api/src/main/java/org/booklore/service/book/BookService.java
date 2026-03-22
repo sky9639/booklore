@@ -385,42 +385,94 @@ public class BookService {
         for (BookEntity book : books) {
             for (BookFileEntity bookFile : book.getBookFiles()) {
                 Path fullFilePath = bookFile.getFullFilePath();
+                Path bookFolder = null;  // 保存图书文件夹路径，用于后续清理
+                boolean folderDeleted = false;  // 标记是否已删除整个文件夹
+
                 try {
                     if (Files.exists(fullFilePath)) {
+                        // 1. 取消文件监控
                         try {
                             monitoringRegistrationService.unregisterSpecificPath(fullFilePath.getParent());
                         } catch (Exception ex) {
                             log.warn("Failed to unregister monitoring for path: {}", fullFilePath.getParent(), ex);
                         }
 
-                        // Handle folder-based audiobooks (delete directory recursively)
-                        if (bookFile.isFolderBased() && Files.isDirectory(fullFilePath)) {
-                            deleteDirectoryRecursively(fullFilePath);
-                            log.info("Deleted folder-based audiobook: {}", fullFilePath);
-                        } else {
-                            Files.delete(fullFilePath);
-                            log.info("Deleted book file: {}", fullFilePath);
-                        }
-
+                        // 2. 获取library根目录列表（用于安全检查）
                         Set<Path> libraryRoots = book.getLibrary().getLibraryPaths().stream()
                                 .map(LibraryPathEntity::getPath)
                                 .map(Paths::get)
                                 .map(Path::normalize)
                                 .collect(Collectors.toSet());
 
-                        deleteEmptyParentDirsUpToLibraryFolders(fullFilePath.getParent(), libraryRoots);
+                        // 3. 删除文件或文件夹
+                        if (bookFile.isFolderBased() && Files.isDirectory(fullFilePath)) {
+                            // 3.1 文件夹类型的有声书：直接删除整个文件夹
+                            deleteDirectoryRecursively(fullFilePath);
+                            log.info("Deleted folder-based audiobook: {}", fullFilePath);
+                            folderDeleted = true;
+                            // 保存父目录用于后续清理
+                            bookFolder = fullFilePath.getParent();
+                        } else {
+                            // 3.2 普通电子书文件：删除文件后再删除整个图书文件夹
+                            bookFolder = fullFilePath.getParent();
 
-                        try {
-                            sidecarMetadataWriter.deleteSidecarFiles(fullFilePath);
-                        } catch (Exception e) {
-                            log.warn("Failed to delete sidecar files for: {}", fullFilePath, e);
+                            // 删除电子书文件
+                            Files.delete(fullFilePath);
+                            log.info("Deleted book file: {}", fullFilePath);
+
+                            // 删除电子书所在的整个文件夹（包括.print、封面等所有内容）
+                            if (bookFolder != null && Files.exists(bookFolder)) {
+                                // 安全检查：确保不是library根目录
+                                boolean isLibraryRoot = isLibraryRootPath(bookFolder, libraryRoots);
+
+                                if (!isLibraryRoot) {
+                                    try {
+                                        deleteDirectoryRecursively(bookFolder);
+                                        log.info("Deleted book folder and all contents: {}", bookFolder);
+                                        folderDeleted = true;
+                                        // 更新bookFolder为其父目录，用于后续清理
+                                        bookFolder = bookFolder.getParent();
+                                    } catch (IOException e) {
+                                        log.warn("Failed to delete book folder: {}", bookFolder, e);
+                                        folderDeleted = false;
+                                    }
+                                } else {
+                                    log.warn("Safety check: Skipped deleting library root folder: {}", bookFolder);
+                                }
+                            }
+                        }
+
+                        // 4. 清理空的父目录（作者文件夹、系列文件夹等）
+                        if (bookFolder != null && folderDeleted) {
+                            try {
+                                deleteEmptyParentDirsUpToLibraryFolders(bookFolder, libraryRoots);
+                            } catch (Exception e) {
+                                log.warn("Failed to cleanup empty parent directories: {}", bookFolder, e);
+                            }
+                        }
+
+                        // 5. 删除sidecar元数据文件（如果文件夹未被删除）
+                        if (!folderDeleted) {
+                            try {
+                                sidecarMetadataWriter.deleteSidecarFiles(fullFilePath);
+                            } catch (Exception e) {
+                                log.warn("Failed to delete sidecar files for: {}", fullFilePath, e);
+                            }
                         }
                     }
                 } catch (IOException e) {
                     log.warn("Failed to delete book file: {}", fullFilePath, e);
                     failedFileDeletions.add(book.getId());
                 } finally {
-                    monitoringRegistrationService.registerSpecificPath(fullFilePath.getParent(), book.getLibrary().getId());
+                    // 6. 恢复文件监控（如果路径仍然存在）
+                    try {
+                        Path monitorPath = fullFilePath.getParent();
+                        if (monitorPath != null && Files.exists(monitorPath)) {
+                            monitoringRegistrationService.registerSpecificPath(monitorPath, book.getLibrary().getId());
+                        }
+                    } catch (Exception ex) {
+                        log.warn("Failed to register monitoring for path: {}", fullFilePath.getParent(), ex);
+                    }
                 }
             }
         }
@@ -433,6 +485,12 @@ public class BookService {
                 : ResponseEntity.status(HttpStatus.MULTI_STATUS).body(response);
     }
 
+    /**
+     * 递归删除目录及其所有内容
+     *
+     * @param path 要删除的目录路径
+     * @throws IOException 删除失败时抛出异常
+     */
     private void deleteDirectoryRecursively(Path path) throws IOException {
         if (!Files.exists(path)) return;
 
@@ -443,17 +501,56 @@ public class BookService {
         }
     }
 
-    public void deleteEmptyParentDirsUpToLibraryFolders(Path currentDir, Set<Path> libraryRoots) {
-        Path dir = currentDir;
-        Set<String> ignoredFilenames = Set.of(".DS_Store", "Thumbs.db");
-        dir = dir.toAbsolutePath().normalize();
+    /**
+     * 检查指定路径是否为library根目录
+     *
+     * @param path 要检查的路径
+     * @param libraryRoots library根目录集合
+     * @return true表示是library根目录，false表示不是
+     */
+    private boolean isLibraryRootPath(Path path, Set<Path> libraryRoots) {
+        if (path == null || libraryRoots == null || libraryRoots.isEmpty()) {
+            return false;
+        }
 
+        Path normalizedPath = path.toAbsolutePath().normalize();
+        for (Path root : libraryRoots) {
+            try {
+                Path normalizedRoot = root.toAbsolutePath().normalize();
+                if (Files.isSameFile(normalizedRoot, normalizedPath)) {
+                    return true;
+                }
+            } catch (IOException e) {
+                log.warn("Failed to compare paths: {} and {}", root, normalizedPath, e);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 向上递归删除空的父目录，直到遇到library根目录或非空目录
+     *
+     * @param currentDir 起始目录
+     * @param libraryRoots library根目录集合
+     */
+    public void deleteEmptyParentDirsUpToLibraryFolders(Path currentDir, Set<Path> libraryRoots) {
+        if (currentDir == null || libraryRoots == null || libraryRoots.isEmpty()) {
+            return;
+        }
+
+        Path dir = currentDir.toAbsolutePath().normalize();
+        // 系统文件忽略列表（这些文件不影响"空目录"判断）
+        Set<String> ignoredFilenames = Set.of(".DS_Store", "Thumbs.db");
+
+        // 规范化所有library根目录路径
         Set<Path> normalizedRoots = new HashSet<>();
         for (Path root : libraryRoots) {
             normalizedRoots.add(root.toAbsolutePath().normalize());
         }
 
+        // 向上遍历父目录
         while (dir != null) {
+            // 1. 检查是否到达library根目录
             boolean isLibraryRoot = false;
             for (Path root : normalizedRoots) {
                 try {
@@ -462,7 +559,7 @@ public class BookService {
                         break;
                     }
                 } catch (IOException e) {
-                    log.warn("Failed to compare paths: {} and {}", root, dir);
+                    log.warn("Failed to compare paths: {} and {}", root, dir, e);
                 }
             }
 
@@ -471,12 +568,14 @@ public class BookService {
                 break;
             }
 
+            // 2. 检查目录是否可读
             File[] files = dir.toFile().listFiles();
             if (files == null) {
                 log.warn("Cannot read directory: {}. Stopping cleanup.", dir);
                 break;
             }
 
+            // 3. 检查目录是否为空（忽略系统文件）
             boolean hasImportantFiles = false;
             for (File file : files) {
                 if (!ignoredFilenames.contains(file.getName())) {
@@ -485,15 +584,19 @@ public class BookService {
                 }
             }
 
+            // 4. 如果目录为空，删除目录及其中的系统文件
             if (!hasImportantFiles) {
+                // 先删除系统文件
                 for (File file : files) {
                     try {
                         Files.delete(file.toPath());
-                        log.info("Deleted ignored file: {}", file.getAbsolutePath());
+                        log.debug("Deleted ignored file: {}", file.getAbsolutePath());
                     } catch (IOException e) {
-                        log.warn("Failed to delete ignored file: {}", file.getAbsolutePath());
+                        log.warn("Failed to delete ignored file: {}", file.getAbsolutePath(), e);
                     }
                 }
+
+                // 再删除空目录
                 try {
                     Files.delete(dir);
                     log.info("Deleted empty directory: {}", dir);
@@ -501,8 +604,11 @@ public class BookService {
                     log.warn("Failed to delete directory: {}", dir, e);
                     break;
                 }
+
+                // 继续向上检查父目录
                 dir = dir.getParent();
             } else {
+                // 目录不为空��停止清理
                 log.debug("Directory {} contains important files. Stopping cleanup.", dir);
                 break;
             }

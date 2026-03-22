@@ -1,0 +1,112 @@
+<div class="dialog-overlay" *ngIf="visible" (click)="onClose()">
+  <div class="dialog crop-dialog" (click)="$event.stopPropagation()">
+    <div class="dialog-header">
+      <div class="header-copy">
+        <div class="dialog-title">调整 AI 生成裁切</div>
+        <div class="dialog-subtitle">关闭会丢弃本次未保存裁切；保存后才真正应用到书脊和封底。</div>
+      </div>
+      <button class="close-btn" (click)="onClose()" aria-label="关闭裁切弹窗">×</button>
+    </div>
+
+    <div class="dialog-body crop-body">
+      <div class="workspace-panel">
+        <div class="panel-toolbar">
+          <div class="toolbar-copy">
+            <div class="section-header">展开图主视图</div>
+            <div class="canvas-hint">拖动分界线调整区域；方向键微调 1px，Shift + 方向键微调 10px。</div>
+          </div>
+          <div class="line-legend">
+            <span class="legend-chip vertical">蓝线：封底左 / 共享线 / 书脊右</span>
+            <span class="legend-chip horizontal">橙线：上下边界</span>
+          </div>
+        </div>
+
+        <div class="canvas-shell">
+          <div
+            class="crop-canvas"
+            [style.width.px]="displayWidth"
+            [style.height.px]="displayHeight"
+            (click)="onCanvasClick($event)"
+          >
+            <img
+              [src]="spreadImageUrl"
+              alt="AI 生成展开图"
+              class="spread-image"
+              [style.width.px]="displayWidth"
+              [style.height.px]="displayHeight"
+            />
+
+            <div
+              *ngFor="let line of lines"
+              class="crop-line"
+              [class.selected]="selectedLineId === line.id"
+              [class.dragging]="draggingLineId === line.id"
+              [class.vertical]="line.type === 'vertical'"
+              [class.horizontal]="line.type === 'horizontal'"
+              [ngStyle]="getLineStyle(line)"
+              (mousedown)="onLineMouseDown($event, line)"
+              [title]="line.label"
+            >
+              <div class="line-hitbox"></div>
+              <div class="line-label">{{ line.shortLabel }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="preview-panel">
+        <div class="status-card">
+          <div class="section-header">当前操作</div>
+          <div class="status-value">{{ selectedLineLabel }}</div>
+          <div class="status-note">点击任意分界线后，可继续拖动或用键盘精调。</div>
+        </div>
+
+        <div class="preview-card">
+          <div class="preview-title">封底预览</div>
+          <div class="preview-image-box">
+            <img
+              *ngIf="backPreviewUrl"
+              [src]="backPreviewUrl"
+              (error)="onPreviewImageError('back')"
+              alt="封底预览"
+              class="preview-image"
+            />
+            <div *ngIf="!backPreviewUrl || previewLoadFailed.back" class="preview-placeholder ready">
+              <div class="placeholder-icon">封</div>
+              <div class="placeholder-title">封底预览区</div>
+              <div class="placeholder-desc">拖动分界线后，这里会实时显示当前裁切结果。</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="preview-card spine-card">
+          <div class="preview-title">书脊预览</div>
+          <div class="preview-image-box spine-box">
+            <img
+              *ngIf="spinePreviewUrl"
+              [src]="spinePreviewUrl"
+              (error)="onPreviewImageError('spine')"
+              alt="书脊预览"
+              class="preview-image spine-image"
+            />
+            <div *ngIf="!spinePreviewUrl || previewLoadFailed.spine" class="preview-placeholder ready">
+              <div class="placeholder-icon slim">脊</div>
+              <div class="placeholder-title">书脊预览区</div>
+              <div class="placeholder-desc">拖动共享线和书脊右边界，可精调书脊宽度与位置。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dialog-footer">
+      <div class="footer-tip">关闭后会放弃当前生成结果，下次会重新生成新图。</div>
+      <div class="footer-actions">
+        <button class="secondary-btn" (click)="onClose()">关闭（丢弃草稿）</button>
+        <button class="primary-btn" (click)="onSave()" [disabled]="saving">
+          {{ saving ? '保存中...' : '保存并应用裁切' }}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>

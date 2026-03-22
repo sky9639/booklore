@@ -82,4 +82,10 @@ def upgrade_workspace_schema(ws: dict, request) -> dict:
         from datetime import datetime
         ws["updated_at"] = datetime.utcnow().isoformat()
 
+    # ------------------------------
+    # ai_crop_draft (未完成的 AI 裁切会话)
+    # ------------------------------
+    if "ai_crop_draft" not in ws:
+        ws["ai_crop_draft"] = None
+
     return ws

@@ -12,6 +12,16 @@ export interface WorkspaceCategory {
   history: string[];
 }
 
+export interface AiCropDraft {
+  spread_filename: string;
+  spread_size?: { width: number; height: number };
+  crop_lines?: { vertical_lines: number[]; horizontal_lines: number[] };
+  source_cover_filename?: string | null;
+  trim_size?: TrimSize | string;
+  spine_width_mm?: number;
+  updated_at?: string;
+}
+
 export interface WorkspaceState {
   book_name?: string;
   trim_size?: TrimSize;
@@ -24,6 +34,7 @@ export interface WorkspaceState {
   preview_path?: string;
   pdf_path?: string;
   updated_at?: string;
+  ai_crop_draft?: AiCropDraft | null;
 }
 
 export interface PrintRequest {
@@ -161,5 +172,46 @@ export class PrintService {
       `${this.baseUrl}/print/${bookId}/pdf/resize/start`,
       { target_size: targetSize }
     );
+  }
+
+  /**
+   * AI 配置相关接口（直连 print-engine 5800 端口，避免 Java 代理）
+   * 原因：AI 配置是全局的，不依赖 bookId；且前端已在 SSE 中使用直连模式
+   */
+  private getPythonBase(): string {
+    return `${window.location.protocol}//${window.location.hostname}:5800`;
+  }
+
+  /** 获取 AI 配置（联通参数 + 提示词模板） */
+  getAiConfig(): Observable<any> {
+    const url = `${this.getPythonBase()}/workspace/ai-config`;
+    return this.http.get<any>(url);
+  }
+
+  /** 保存 AI 配置 */
+  saveAiConfig(config: any): Observable<any> {
+    const url = `${this.getPythonBase()}/workspace/ai-config`;
+    return this.http.post<any>(url, config);
+  }
+
+  /** 测试 AI 连接 */
+  testAiConfig(runtimeConfig: any): Observable<any> {
+    const url = `${this.getPythonBase()}/workspace/ai-config/test`;
+    return this.http.post<any>(url, runtimeConfig);
+  }
+
+  /** 生成 Gemini 展开图（返回临时预览图和初始裁切线） */
+  generateSpread(bookId: number | string, request: any): Observable<any> {
+    return this.http.post<any>(`${this.baseUrl}/print/${bookId}/workspace/ai-generate/spread`, request);
+  }
+
+  /** 保存裁切后的书脊和封底 */
+  saveCroppedMaterials(bookId: number | string, request: any): Observable<any> {
+    return this.http.post<any>(`${this.baseUrl}/print/${bookId}/workspace/ai-generate/crop`, request);
+  }
+
+  /** 丢弃当前 AI 裁切草稿 */
+  discardAiCropDraft(bookId: number | string): Observable<any> {
+    return this.http.post<any>(`${this.baseUrl}/print/${bookId}/workspace/ai-generate/discard`, {});
   }
 }

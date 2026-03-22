@@ -32,4 +32,16 @@ public class PrintRequest {
      */
     @JsonProperty("trim_size")
     private String trimSize;
+
+    /**
+     * 前端当前书脊宽度（mm）
+     */
+    @JsonProperty("spine_width_mm")
+    private Double spineWidthMm;
+
+    /**
+     * 提示词模板 ID（可选）
+     */
+    @JsonProperty("template_id")
+    private String templateId;
 }

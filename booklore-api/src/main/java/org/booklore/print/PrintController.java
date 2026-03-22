@@ -607,45 +607,146 @@ public class PrintController {
                     "book_title",
                     meta.getTitle() != null ? meta.getTitle() : ""
                 );
-
-                List<String> authors = new ArrayList<>();
-                if (meta.getAuthors() != null) {
-                    meta.getAuthors().forEach(a -> authors.add(a.getName()));
-                }
-                payload.put("authors", authors); // Fix: Python expects list[str], not joined String
-
-                String desc = meta.getDescription();
-                if (desc != null && desc.length() > 800) desc = desc.substring(
-                    0,
-                    800
-                );
-                payload.put("description", desc != null ? desc : ""); // Fix: Python expects "description" not "book_description"
             }
 
-            // ── 2. 调用 print-engine，拿回 PNG bytes ─────────────────────────
             byte[] imageBytes = client.aiGenerate(payload);
 
-            // ── 3. 命名：ai_{target}_{yyyyMMdd_HHmmss}.png ───────────────────
             String timestamp = LocalDateTime.now().format(
                 DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")
             );
             String filename = "ai_" + target + "_" + timestamp + ".png";
 
-            // ── 4. 保存到 .print/{target}/ ───────────────────────────────────
             Path printRoot = fullPath.getParent().resolve(".print");
             Path targetDir = printRoot.resolve(target);
             targetDir.toFile().mkdirs();
             Files.write(targetDir.resolve(filename), imageBytes);
 
-            // ── 5. 更新 workspace.json（与手工上传完全相同的逻辑）────────────
             Map<String, Object> workspace = updateWorkspaceJson(
                 printRoot,
                 target,
                 filename
             );
 
-            // ── 6. 返回 workspace JSON，前端用 asset 接口拼 URL ──────────────
             return ResponseEntity.ok(workspace);
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(
+                Map.of("error", e.getMessage())
+            );
+        }
+    }
+
+    /**
+     * 生成 Gemini 展开图（返回临时预览图和初始裁切线）
+     */
+    @PostMapping("/{bookId}/workspace/ai-generate/spread")
+    public ResponseEntity<?> generateSpread(
+        @PathVariable Long bookId,
+        @RequestBody PrintRequest request
+    ) {
+        try {
+            BookEntity book = bookRepository
+                .findById(bookId)
+                .orElseThrow(() -> new RuntimeException("Book not found"));
+
+            Path fullPath = book.getFullFilePath();
+            if (fullPath == null) {
+                return ResponseEntity.badRequest().body(
+                    Map.of("error", "Book file path could not be resolved")
+                );
+            }
+
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("book_path", fullPath.toString());
+            payload.put(
+                "book_title",
+                book.getMetadata() != null && book.getMetadata().getTitle() != null
+                    ? book.getMetadata().getTitle()
+                    : ""
+            );
+            payload.put(
+                "trim_size",
+                request.getTrimSize() != null ? request.getTrimSize() : "A5"
+            );
+
+            double paperThickness = request.getPaperThickness() != null
+                ? request.getPaperThickness()
+                : 0.06;
+            int pageCount = request.getPageCount() != null ? request.getPageCount() : 0;
+            double spineWidthMm = request.getSpineWidthMm() != null
+                ? request.getSpineWidthMm()
+                : (pageCount > 0 ? pageCount * paperThickness : 4.74);
+            payload.put("spine_width_mm", spineWidthMm);
+
+            if (request.getTemplateId() != null && !request.getTemplateId().trim().isEmpty()) {
+                payload.put("template_id", request.getTemplateId());
+            }
+
+            Map result = client.generateSpread(payload);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(
+                Map.of("error", e.getMessage())
+            );
+        }
+    }
+
+    /**
+     * 保存裁切后的书脊和封底
+     */
+    @PostMapping("/{bookId}/workspace/ai-generate/crop")
+    public ResponseEntity<?> saveAiCrop(
+        @PathVariable Long bookId,
+        @RequestBody Map<String, Object> body
+    ) {
+        try {
+            BookEntity book = bookRepository
+                .findById(bookId)
+                .orElseThrow(() -> new RuntimeException("Book not found"));
+
+            Path fullPath = book.getFullFilePath();
+            if (fullPath == null) {
+                return ResponseEntity.badRequest().body(
+                    Map.of("error", "Book file path could not be resolved")
+                );
+            }
+
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("book_path", fullPath.toString());
+            payload.put("spread_filename", body.get("spread_filename"));
+            payload.put("vertical_lines", body.get("vertical_lines"));
+            payload.put("horizontal_lines", body.get("horizontal_lines"));
+
+            Map result = client.saveCroppedMaterials(payload);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(
+                Map.of("error", e.getMessage())
+            );
+        }
+    }
+
+    /**
+     * 丢弃当前 AI 裁切草稿
+     */
+    @PostMapping("/{bookId}/workspace/ai-generate/discard")
+    public ResponseEntity<?> discardAiCropDraft(@PathVariable Long bookId) {
+        try {
+            BookEntity book = bookRepository
+                .findById(bookId)
+                .orElseThrow(() -> new RuntimeException("Book not found"));
+
+            Path fullPath = book.getFullFilePath();
+            if (fullPath == null) {
+                return ResponseEntity.badRequest().body(
+                    Map.of("error", "Book file path could not be resolved")
+                );
+            }
+
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("book_path", fullPath.toString());
+
+            Map result = client.discardAiCropDraft(payload);
+            return ResponseEntity.ok(result);
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(
                 Map.of("error", e.getMessage())
@@ -746,47 +847,8 @@ public class PrintController {
                 );
             }
 
-            // 2. 作者（可选，默认 "Unknown Author"）
-            List<String> authors = new ArrayList<>();
-            if (meta != null && meta.getAuthors() != null) {
-                meta
-                    .getAuthors()
-                    .forEach(a -> {
-                        if (
-                            a.getName() != null && !a.getName().isBlank()
-                        ) authors.add(a.getName());
-                    });
-            }
-            if (authors.isEmpty()) {
-                authors.add("Unknown Author");
-            }
-
-            // 3. 简介（可选，默认通用描述）
-            String desc = (meta != null) ? meta.getDescription() : null;
-            if (desc == null || desc.isBlank()) {
-                desc = "A captivating story that will keep you turning pages.";
-            }
-            if (desc.length() > 800) desc = desc.substring(0, 800);
-
-            // 4. 分类（可选，默认 "children's book, cartoon style"）
-            List<String> categories = new ArrayList<>();
-            if (meta != null && meta.getCategories() != null && !meta.getCategories().isEmpty()) {
-                meta.getCategories().forEach(cat -> {
-                    if (cat.getName() != null && !cat.getName().isBlank()) {
-                        categories.add(cat.getName());
-                    }
-                });
-            }
-            if (categories.isEmpty()) {
-                categories.add("children's book");
-                categories.add("cartoon style");
-            }
-
             // ── 组装 payload ──────────────────────────────────────────────────
             payload.put("book_title", bookTitle);
-            payload.put("authors", authors);
-            payload.put("description", desc);
-            payload.put("categories", categories);
             payload.put(
                 "spine_width_mm",
                 request.getPaperThickness() != null &&

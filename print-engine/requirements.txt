@@ -1,13 +1,22 @@
+# Web 框架
 fastapi
 uvicorn
 pydantic
-Pillow
-reportlab
-PyMuPDF
-python-multipart
-requests
-python-dotenv
-websocket-client
-numpy
-anthropic
-PyPDF2
+
+# PDF 处理
+PyMuPDF          # 用于内容边界检测和格式化
+PyPDF2           # 用于基础PDF操作和备用方案
+reportlab        # 用于生成PDF页面
+
+# 图像处理
+Pillow           # 用于图片处理和封面提取
+numpy            # 用于图像数组操作
+
+# AI 功能
+anthropic        # Claude API 客户端
+
+# 工具库
+requests         # HTTP 请求
+python-dotenv    # 环境变量管理
+python-multipart # 文件上传支持
+websocket-client # WebSocket 支持（如果需要）

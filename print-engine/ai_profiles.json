@@ -1,0 +1,15 @@
+{
+  "activeProfileId": "profile_1774092221720",
+  "profiles": [
+    {
+      "id": "profile_1774092221720",
+      "name": "302Ai",
+      "baseUrl": "https://api.302.ai",
+      "apiPath": "/google/v1/models/{model}",
+      "apiKey": "sk-L6IHFEiGAVAJqX6FM8RrlboM8J9xTxhUBpOqOYfg1SdbQCij",
+      "model": "gemini-2.5-flash-image",
+      "timeout": 240,
+      "imageMaxSend": 2048
+    }
+  ]
+}

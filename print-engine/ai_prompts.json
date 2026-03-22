@@ -1,0 +1,59 @@
+{
+  "activeTemplateId": "template_standard",
+  "templates": [
+    {
+      "id": "template_standard",
+      "name": "标准印刷展开图",
+      "description": "强调三段式布局、风格一致、外部角线、白边留空",
+      "content": "请根据上传的封面图和书名《{book_name}》，生成一张完整的书皮展开图。\n\n要求如下：\n1. 三段式布局：从左到右依次是【封底、书脊、封面】\n2. 风格、配色、边框图案必须与封面完全一致\n3. 书脊部分应该较窄，封底和封面宽度相同\n4. 添加外部印刷角线和十字线（位于纯白背景上）\n5. 底部和周围保持纯白留空\n\n注意：\n- 裁切线必须完全在白色区域，不遮挡主画面\n- 严禁在色块边界添加连续线条\n- 底部大面积留白",
+      "variables": [
+        {
+          "name": "book_name",
+          "description": "书名（自动获取）",
+          "example": "Ninja Girl"
+        },
+        {
+          "name": "cover_image",
+          "description": "封面参考图（自动获取，以图片形式发送）",
+          "example": "cover.png"
+        }
+      ]
+    },
+    {
+      "id": "template_consistent",
+      "name": "强一致性模板",
+      "description": "封面纹样、边框、颜色高度复用",
+      "content": "根据封面图和书名《{book_name}》，生成书籍展开图（封底-书脊-封面）。\n\n核心要求：\n1. 封底和书脊必须完全复用封面的纹样、边框、配色\n2. 不要重新设计风格，只做自然延展\n3. 书脊较窄，封底和封面等宽\n4. 保持视觉连贯性\n5. 外部添加印刷角线和十字线\n6. 底部和周围保持纯白留空",
+      "variables": [
+        {
+          "name": "book_name",
+          "description": "书名（自动获取）",
+          "example": "Ninja Girl"
+        },
+        {
+          "name": "cover_image",
+          "description": "封面参考图（自动获取）",
+          "example": "cover.png"
+        }
+      ]
+    },
+    {
+      "id": "template_safe",
+      "name": "简洁安全模板",
+      "description": "少元素、少幻觉、保守生成",
+      "content": "为《{book_name}》生成简洁的书籍展开图。\n\n要求：\n- 参考封面图风格\n- 布局：封底-书脊-封面（书脊较窄）\n- 风格简洁，避免复杂元素\n- 外部印刷角线\n- 底部纯白留空",
+      "variables": [
+        {
+          "name": "book_name",
+          "description": "书名（自动获取）",
+          "example": "Ninja Girl"
+        },
+        {
+          "name": "cover_image",
+          "description": "封面参考图（自动获取）",
+          "example": "cover.png"
+        }
+      ]
+    }
+  ]
+}

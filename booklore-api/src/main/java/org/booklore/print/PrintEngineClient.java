@@ -224,4 +224,56 @@ public class PrintEngineClient {
 
         return emitter;
     }
+
+    /**
+     * 生成 Gemini 展开图（返回临时预览图和初始裁切线）
+     * 使用 aiRestTemplate（readTimeout = 300s）
+     */
+    public Map generateSpread(Map<String, Object> payload) {
+        try {
+            ResponseEntity<Map> response = aiRestTemplate.postForEntity(
+                BASE_URL + "/workspace/ai-generate/spread",
+                payload,
+                Map.class
+            );
+            Map body = response.getBody();
+            if (body == null) throw new RuntimeException("generateSpread returned null");
+            return body;
+        } catch (Exception e) {
+            throw new RuntimeException("generateSpread failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 保存裁切后的书脊和封底
+     */
+    public Map saveCroppedMaterials(Map<String, Object> payload) {
+        try {
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                BASE_URL + "/workspace/ai-generate/crop",
+                payload,
+                Map.class
+            );
+            Map body = response.getBody();
+            if (body == null) throw new RuntimeException("saveCroppedMaterials returned null");
+            return body;
+        } catch (Exception e) {
+            throw new RuntimeException("saveCroppedMaterials failed: " + e.getMessage(), e);
+        }
+    }
+
+    public Map discardAiCropDraft(Map<String, Object> payload) {
+        try {
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                BASE_URL + "/workspace/ai-generate/discard",
+                payload,
+                Map.class
+            );
+            Map body = response.getBody();
+            if (body == null) throw new RuntimeException("discardAiCropDraft returned null");
+            return body;
+        } catch (Exception e) {
+            throw new RuntimeException("discardAiCropDraft failed: " + e.getMessage(), e);
+        }
+    }
 }

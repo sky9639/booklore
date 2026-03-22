@@ -19,7 +19,16 @@ from workspace_manager import *
 
 load_dotenv("booklore.env")
 
-from ai_generator import generate_ai_material
+from ai_generator import (
+    generate_ai_material,
+    get_ai_runtime_config,
+    save_ai_runtime_config,
+    load_prompt_config,
+    save_prompt_config,
+    test_gemini_connection,
+    generate_spread_preview,
+    save_cropped_materials,
+)
 
 app = FastAPI()
 
@@ -36,6 +45,18 @@ app.add_middleware(
 
 def touch_workspace(ws: dict):
     ws["updated_at"] = datetime.utcnow().isoformat()
+
+
+def cleanup_spread_preview(print_root: str, spread_filename: str | None):
+    if not spread_filename:
+        return
+
+    preview_path = os.path.join(print_root, "preview", spread_filename)
+    try:
+        if os.path.isfile(preview_path):
+            os.remove(preview_path)
+    except Exception as e:
+        print(f"cleanup spread preview failed: {e}")
 
 
 # ==============================
@@ -68,6 +89,47 @@ class SaveParamsRequest(BaseModel):
     page_count: int
     paper_thickness: float
     spine_width_mm: float
+
+
+class AiProfileModel(BaseModel):
+    """单个联通参数配置"""
+    id: str
+    name: str
+    baseUrl: str
+    apiPath: str = "/google/v1/models/{model}"
+    apiKey: str
+    model: str
+    timeout: int = 240
+    imageMaxSend: int = 1024
+
+
+class AiRuntimeConfigRequest(BaseModel):
+    """联通参数多组配置模型"""
+    activeProfileId: str
+    profiles: list[AiProfileModel]
+
+
+class AiPromptConfigRequest(BaseModel):
+    """提示词模板配置模型"""
+    activeTemplateId: str
+    templates: list[dict]
+
+
+class AiConfigBundleRequest(BaseModel):
+    """AI 配置完整结构（联通参数 + 提示词）"""
+    runtime: AiRuntimeConfigRequest
+    prompts: AiPromptConfigRequest
+
+
+class AiCropSaveRequest(BaseModel):
+    book_path: str
+    spread_filename: str
+    vertical_lines: list[int]
+    horizontal_lines: list[int]
+
+
+class AiCropDiscardRequest(BaseModel):
+    book_path: str
 
 
 # ==============================
@@ -484,13 +546,11 @@ class AiGenerateRequest(BaseModel):
     book_id: int | None = None
     target: str = "all"  # "all" | "spine" | "back"
     book_title: str | None = None
-    authors: list[str] = []
-    description: str | None = None
-    categories: list[str] = ["children's book"]  # 默认儿童图书（与本地测试一致）
     trim_size: str = "A5"
     spine_width_mm: float = 4.74
     count: int = 1
     quality: str = "medium"
+    template_id: str | None = None
 
 
 def _run_ai_task_all(
@@ -564,9 +624,6 @@ def _run_ai_task_all(
                 cover_filename=cover_selected,
                 target=target,
                 book_title=request.book_title or ws.get("book_name", ""),
-                authors=request.authors,
-                description=request.description or "",
-                categories=request.categories,
                 trim_size=request.trim_size or ws.get("trim_size", "A5"),
                 spine_width_mm=request.spine_width_mm or ws.get("spine_width_mm", 4.74),
                 count=max(1, min(request.count, 3)),
@@ -771,7 +828,8 @@ def ai_generate_progress(task_id: str):
 
         # 超时
         yield f"data: {json.dumps({'status': 'error', 'error': 'generation timeout (20min)'})}\n\n"
-        yield f"data: {json.dumps({'status': 'error', 'error': 'generation timeout (20min)'})}\n\n"
+        with _ai_tasks_lock:
+            _ai_tasks.pop(task_id, None)
 
     return StreamingResponse(
         _stream(),
@@ -800,19 +858,17 @@ def ai_generate(request: AiGenerateRequest):
 
     try:
         for target in targets:
-            filenames = generate_ai_material(
+            result = generate_ai_material(
                 print_root=print_root,
                 cover_filename=cover_selected,
                 target=target,
                 book_title=request.book_title or ws.get("book_name", ""),
-                authors=request.authors,
-                description=request.description or "",
-                categories=request.categories,
                 trim_size=request.trim_size or ws.get("trim_size", "A5"),
                 spine_width_mm=request.spine_width_mm or ws.get("spine_width_mm", 4.74),
                 count=max(1, min(request.count, 3)),
                 quality=request.quality,
             )
+            filenames = result[0] if isinstance(result, tuple) else result
             if filenames:
                 for filename in reversed(filenames):
                     update_history(ws, target, filename)
@@ -825,4 +881,125 @@ def ai_generate(request: AiGenerateRequest):
 
     touch_workspace(ws)
     save_workspace(request.book_path, ws)
+    return ws
+
+
+@app.get("/workspace/ai-config")
+def get_ai_config():
+    return {
+        "runtime": get_ai_runtime_config(mask_secret=False),
+        "prompts": load_prompt_config(),
+    }
+
+
+@app.post("/workspace/ai-config")
+def save_ai_config(request: AiConfigBundleRequest):
+    runtime = save_ai_runtime_config(request.runtime.model_dump())
+    prompts = save_prompt_config(request.prompts.model_dump())
+    return {
+        "runtime": runtime,
+        "prompts": prompts,
+        "message": "AI 配置保存成功",
+    }
+
+
+@app.post("/workspace/ai-config/test")
+def test_ai_config(request: AiRuntimeConfigRequest):
+    try:
+        return test_gemini_connection(request.model_dump())
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/workspace/ai-generate/spread")
+def ai_generate_spread(request: AiGenerateRequest):
+    ws = load_workspace(request.book_path)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    cover_selected = ws.get("cover", {}).get("selected")
+    if not cover_selected:
+        raise HTTPException(status_code=400, detail="No cover image selected")
+
+    print_root = get_print_root(request.book_path)
+    trim_size = request.trim_size or ws.get("trim_size", "A5")
+    spine_width_mm = request.spine_width_mm or ws.get("spine_width_mm", 4.74)
+
+    try:
+        result = generate_spread_preview(
+            print_root=print_root,
+            cover_filename=cover_selected,
+            book_title=request.book_title or ws.get("book_name", ""),
+            trim_size=trim_size,
+            spine_width_mm=spine_width_mm,
+            template_id=request.template_id,
+        )
+
+        ws["ai_crop_draft"] = {
+            "spread_filename": result.get("spread_filename"),
+            "spread_size": result.get("spread_size"),
+            "crop_lines": result.get("crop_lines"),
+            "source_cover_filename": cover_selected,
+            "trim_size": trim_size,
+            "spine_width_mm": spine_width_mm,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        touch_workspace(ws)
+        save_workspace(request.book_path, ws)
+
+        result["workspace"] = ws
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/workspace/ai-generate/crop")
+def ai_generate_crop(request: AiCropSaveRequest):
+    ws = load_workspace(request.book_path)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    print_root = get_print_root(request.book_path)
+
+    try:
+        result = save_cropped_materials(
+            print_root=print_root,
+            spread_filename=request.spread_filename,
+            trim_size=ws.get("trim_size", "A5"),
+            spine_width_mm=ws.get("spine_width_mm", 4.74),
+            vertical_lines=request.vertical_lines,
+            horizontal_lines=request.horizontal_lines,
+        )
+
+        update_history(ws, "back", result["back_filename"])
+        update_history(ws, "spine", result["spine_filename"])
+        ws["ai_crop_draft"] = None
+        touch_workspace(ws)
+        save_workspace(request.book_path, ws)
+        cleanup_spread_preview(print_root, request.spread_filename)
+
+        return {
+            "workspace": ws,
+            "back_filename": result["back_filename"],
+            "spine_filename": result["spine_filename"],
+            "crop_lines": result["crop_lines"],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/workspace/ai-generate/discard")
+def ai_generate_discard(request: AiCropDiscardRequest):
+    ws = load_workspace(request.book_path)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    draft = ws.get("ai_crop_draft") or {}
+    spread_filename = draft.get("spread_filename")
+    print_root = get_print_root(request.book_path)
+
+    ws["ai_crop_draft"] = None
+    touch_workspace(ws)
+    save_workspace(request.book_path, ws)
+    cleanup_spread_preview(print_root, spread_filename)
     return ws

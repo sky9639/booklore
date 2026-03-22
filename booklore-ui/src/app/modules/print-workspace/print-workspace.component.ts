@@ -32,12 +32,14 @@ import {
 import { MaterialService } from "./services/material.service";
 
 import { MaterialSlotComponent } from "./components/material-slot.component";
+import { GeminiConfigDialogComponent } from "./components/gemini-config-dialog.component";
+import { GeminiCropDialogComponent } from "./components/gemini-crop-dialog.component";
 import { TrimSize } from "./models/workspace.model";
 
 @Component({
   selector: "app-print-workspace",
   standalone: true,
-  imports: [FormsModule, CommonModule, MaterialSlotComponent],
+  imports: [FormsModule, CommonModule, MaterialSlotComponent, GeminiConfigDialogComponent, GeminiCropDialogComponent],
   templateUrl: "./print-workspace.component.html",
   styleUrls: ["./print-workspace.component.scss"],
 })
@@ -81,6 +83,19 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   aiProgressText = "AI 生成书脊 & 封底";
   aiLastResult: "success" | "error" | null = null;
   aiErrorMsg = "";
+
+  // Gemini 配置与裁切弹窗状态
+  aiConfigVisible = false;
+  aiCropVisible = false;
+  aiConfigLoading = false;
+  aiConfigBundle: any = null;
+  spreadPreview: {
+    imageUrl: string;
+    spreadFilename: string;
+    spreadWidth: number;
+    spreadHeight: number;
+    cropLines: { vertical_lines: number[]; horizontal_lines: number[] };
+  } | null = null;
 
   get canAiGenerate(): boolean {
     return !!this.workspace?.cover?.selected;
@@ -129,7 +144,6 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     this.print.initWorkspace(this.bookId).subscribe({
       next: (ws) => {
         this.workspaceState.setWorkspace(ws);
-        this.refreshComposite();
       },
       error: (err) => console.error("Workspace 初始化失败", err),
     });
@@ -659,6 +673,218 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
    */
   private saveParams(): void {
     // TODO: 待 print.service 新增 saveWorkspaceParams 接口后实现
+  }
+
+  /**
+   * ============================================================
+   * Gemini AI 配置管理
+   * ============================================================
+   */
+
+  /** 打开 AI 配置弹窗 */
+  openAiConfig(): void {
+    this.aiConfigLoading = true;
+    this.aiConfigVisible = true;
+
+    this.print.getAiConfig().subscribe({
+      next: (result) => {
+        this.aiConfigLoading = false;
+        this.aiConfigBundle = result;
+      },
+      error: (err) => {
+        this.aiConfigLoading = false;
+        console.error('加载 AI 配置失败', err);
+        alert('加载配置失败，请检查 print-engine 服务');
+      },
+    });
+  }
+
+  /** 处理 AI 配置保存/测试 */
+  onAiConfigSave(event: any): void {
+    if (event.action === 'test') {
+      // 测试连接（传入完整 runtime 配置，包含 profiles）
+      this.print.testAiConfig(event.payload).subscribe({
+        next: (result) => {
+          event.callback(result);
+        },
+        error: (err) => {
+          event.callback({
+            success: false,
+            error: err.error?.detail || err.error?.error || err.message || '连接失败',
+          });
+        },
+      });
+    } else if (event.action === 'save') {
+      // 保存配置（runtime 包含 activeProfileId + profiles[]）
+      const bundle = {
+        runtime: event.runtime,
+        prompts: event.prompts,
+      };
+      this.print.saveAiConfig(bundle).subscribe({
+        next: () => {
+          this.aiConfigBundle = bundle;
+          event.callback(true);
+        },
+        error: (err) => {
+          console.error('保存 AI 配置失败', err);
+          event.callback(false);
+        },
+      });
+    }
+  }
+
+  /** 关闭 AI 配置弹窗 */
+  closeAiConfig(): void {
+    this.aiConfigVisible = false;
+  }
+
+  /**
+   * ============================================================
+   * Gemini 展开图生成与裁切
+   * ============================================================
+   */
+
+  private buildSpreadPreview(payload: {
+    spread_filename: string;
+    spread_size?: { width?: number; height?: number };
+    crop_lines?: {
+      vertical_lines?: number[];
+      horizontal_lines?: number[];
+      vertical?: number[];
+      horizontal?: number[];
+    };
+  }): {
+    imageUrl: string;
+    spreadFilename: string;
+    spreadWidth: number;
+    spreadHeight: number;
+    cropLines: { vertical_lines: number[]; horizontal_lines: number[] };
+  } {
+    const verticalLines = payload.crop_lines?.vertical_lines?.length
+      ? payload.crop_lines.vertical_lines
+      : (payload.crop_lines?.vertical || []);
+    const horizontalLines = payload.crop_lines?.horizontal_lines?.length
+      ? payload.crop_lines.horizontal_lines
+      : (payload.crop_lines?.horizontal || []);
+
+    return {
+      imageUrl: this.print.getAssetUrl(this.bookId, 'preview', payload.spread_filename),
+      spreadFilename: payload.spread_filename,
+      spreadWidth: payload.spread_size?.width || 0,
+      spreadHeight: payload.spread_size?.height || 0,
+      cropLines: {
+        vertical_lines: verticalLines,
+        horizontal_lines: horizontalLines,
+      },
+    };
+  }
+
+  /**
+   * 启动 Gemini 展开图生成（新流程）
+   * 替代旧的 onAiGenerate() SSE 流程
+   */
+  async onAiGenerateSpread(): Promise<void> {
+    if (!this.canAiGenerate || this.aiGenerating) {
+      return;
+    }
+
+    const ws = this.workspace;
+    if (!ws) {
+      alert('workspace 未初始化');
+      return;
+    }
+
+    this.aiGenerating = true;
+    this.aiLastResult = null;
+    this.aiErrorMsg = '';
+    this.aiProgress = 0;
+    this.aiProgressText = '生成展开图中...';
+    this.aiPhaseText = '准备中';
+    this.aiLogMessages = [];
+    this.addLog('开始生成 Gemini 展开图...', 0, true);
+
+    const request = {
+      trimSize: ws.trim_size,
+      pageCount: ws.page_count,
+      paperThickness: ws.paper_thickness,
+      spine_width_mm: ws.spine_width_mm,
+      template_id: this.aiConfigBundle?.prompts?.activeTemplateId || null,
+    };
+
+    this.print.generateSpread(this.bookId, request).subscribe({
+      next: (result) => {
+        this.aiGenerating = false;
+        this.aiProgress = 100;
+        this.aiPhaseText = '✅ 展开图生成完成';
+        this.addLog('✅ 展开图生成成功，打开裁切窗口', 100, true);
+
+        this.spreadPreview = this.buildSpreadPreview(result);
+        this.aiCropVisible = true;
+
+        if (result.workspace) {
+          this.workspaceState.setWorkspace(result.workspace);
+        }
+      },
+      error: (err) => {
+        this.aiGenerating = false;
+        this.aiLastResult = 'error';
+        this.aiErrorMsg = err.error?.error || '生成失败';
+        this.addLog(`❌ 生成失败: ${this.aiErrorMsg}`, 0, true);
+        console.error('Gemini 展开图生成失败', err);
+      },
+    });
+  }
+
+  /** 保存裁切结果 */
+  onCropSave(event: any): void {
+    const ws = this.workspace;
+    if (!ws || !this.spreadPreview) {
+      alert('数据异常，无法保存');
+      return;
+    }
+
+    const request = {
+      spread_filename: this.spreadPreview.spreadFilename,
+      vertical_lines: event.vertical_lines,
+      horizontal_lines: event.horizontal_lines,
+    };
+
+    this.print.saveCroppedMaterials(this.bookId, request).subscribe({
+      next: (result) => {
+        // Java 代理返回的是 { workspace, ... }
+        const nextWorkspace = result?.workspace ?? result;
+
+        this.workspaceState.setWorkspace(nextWorkspace);
+
+        this.aiCropVisible = false;
+        this.spreadPreview = null;
+
+        event.callback();
+
+        this.aiLastResult = 'success';
+        this.addLog('✅ 裁切保存成功，素材已回填', 100, true);
+      },
+      error: (err) => {
+        alert('保存失败：' + (err.error?.error || '未知错误'));
+        event.callback();
+      },
+    });
+  }
+
+  /** 关闭裁切弹窗并丢弃草稿 */
+  closeCrop(): void {
+    this.print.discardAiCropDraft(this.bookId).subscribe({
+      next: (workspace) => {
+        this.workspaceState.setWorkspace(workspace);
+        this.aiCropVisible = false;
+        this.spreadPreview = null;
+      },
+      error: (err) => {
+        console.error('丢弃 AI 裁切草稿失败', err);
+        this.aiCropVisible = false;
+        this.spreadPreview = null;
+      },
+    });
   }
 
   goBookDetail() {

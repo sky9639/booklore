@@ -1,0 +1,219 @@
+<!-- Gemini AI 配置弹窗 V2.0 -->
+<div class="dialog-overlay" *ngIf="visible" (click)="onCancel()">
+  <div class="dialog" (click)="$event.stopPropagation()">
+    <!-- 顶部标题栏 -->
+    <div class="tabs-row">
+      <div class="tabs">
+        <button class="tab active">AI 配置</button>
+      </div>
+      <button class="close-btn" (click)="onCancel()">×</button>
+    </div>
+
+    <!-- 弹窗内容 -->
+    <div class="dialog-body">
+      <!-- 联通参数区 -->
+      <div class="section-block">
+        <div class="section-header">联通参数</div>
+        <div class="section-desc">选择或编辑 Gemini 接口连接方案，切换页签不会影响下方提示词模板。</div>
+
+        <!-- 联通参数页签 -->
+        <div class="tab-group">
+          <div class="scheme-tabs">
+            <button
+              *ngFor="let profile of profiles"
+              class="scheme-tab"
+              [class.active]="activeProfileId === profile.id"
+              [class.editing]="editingProfileId === profile.id"
+              (click)="selectProfile(profile.id)"
+            >
+              <ng-container *ngIf="editingProfileId !== profile.id; else profileRenameInput">
+                <span class="tab-name" (dblclick)="startRenameProfile(profile.id, $event)">{{ profile.name }}</span>
+                <span
+                  *ngIf="profiles.length > 1"
+                  class="tab-delete"
+                  (click)="deleteProfile(profile.id, $event)"
+                  title="删除方案"
+                >×</span>
+              </ng-container>
+              <ng-template #profileRenameInput>
+                <input
+                  #profileRenameInput
+                  [attr.data-profile-rename-input]="profile.id"
+                  type="text"
+                  [(ngModel)]="editingProfileName"
+                  class="tab-name-input"
+                  (blur)="confirmRenameProfile()"
+                  (keydown.enter)="confirmRenameProfile()"
+                  (keydown.escape)="cancelRenameProfile()"
+                />
+              </ng-template>
+            </button>
+            <button class="add-tab-btn" (click)="addProfile()" title="新增联通参数方案">+</button>
+          </div>
+        </div>
+
+        <!-- 当前 profile 表单 -->
+        <div class="form-panel" *ngIf="profileFormData">
+          <div class="form-row">
+            <div class="form-group half">
+              <label>Base URL</label>
+              <input
+                type="text"
+                [(ngModel)]="profileFormData.baseUrl"
+                placeholder="https://api.302.ai"
+                class="input-field"
+              />
+            </div>
+            <div class="form-group half">
+              <label>模型名称</label>
+              <input
+                type="text"
+                [(ngModel)]="profileFormData.model"
+                placeholder="gemini-2.5-flash-image"
+                class="input-field"
+              />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>API Path</label>
+            <input
+              type="text"
+              [(ngModel)]="profileFormData.apiPath"
+              placeholder="{{ apiPathPlaceholder }}"
+              class="input-field"
+            />
+            <div class="field-tip">支持 &#123;model&#125; 占位符，测试连接和正式生成都会使用这里的路径。</div>
+          </div>
+
+          <div class="form-group">
+            <label>API Key</label>
+            <input
+              type="text"
+              [(ngModel)]="profileFormData.apiKey"
+              placeholder="sk-..."
+              class="input-field"
+            />
+          </div>
+
+          <div class="form-row">
+            <div class="form-group half">
+              <label>超时（秒）</label>
+              <input
+                type="number"
+                [(ngModel)]="profileFormData.timeout"
+                min="30"
+                max="600"
+                class="input-field"
+              />
+            </div>
+            <div class="form-group half">
+              <label>AI 参考图最大长边（像素）</label>
+              <input
+                type="number"
+                [(ngModel)]="profileFormData.imageMaxSend"
+                min="512"
+                max="4096"
+                class="input-field"
+              />
+              <div class="field-tip">值越大细节越清晰，但请求会稍慢。仅影响发送给 AI 的封面压缩尺寸。</div>
+            </div>
+          </div>
+
+          <div class="action-row">
+            <button class="secondary-btn" (click)="testConnection()" [disabled]="testing">
+              {{ testing ? '测试中...' : '测试连接' }}
+            </button>
+            <span class="inline-status" [class.success]="testResult.includes('✅')" [class.error]="testResult.includes('❌')">
+              {{ testResult }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 提示词模板区 -->
+      <div class="section-block">
+        <div class="section-header">提示词模板</div>
+        <div class="section-desc">选择或编辑生成展开图使用的提示词模板，切换页签不会影响上方联通参数。</div>
+
+        <!-- 提示词模板页签 -->
+        <div class="tab-group">
+          <div class="scheme-tabs">
+            <button
+              *ngFor="let template of templates"
+              class="scheme-tab"
+              [class.active]="activeTemplateId === template.id"
+              [class.editing]="editingTemplateId === template.id"
+              (click)="selectTemplate(template.id)"
+            >
+              <ng-container *ngIf="editingTemplateId !== template.id; else templateRenameInput">
+                <span class="tab-name" (dblclick)="startRenameTemplate(template.id, $event)">{{ template.name }}</span>
+                <span
+                  *ngIf="templates.length > 1"
+                  class="tab-delete"
+                  (click)="deleteTemplate(template.id, $event)"
+                  title="删除模板"
+                >×</span>
+              </ng-container>
+              <ng-template #templateRenameInput>
+                <input
+                  #templateRenameInput
+                  [attr.data-template-rename-input]="template.id"
+                  type="text"
+                  [(ngModel)]="editingTemplateName"
+                  class="tab-name-input"
+                  (blur)="confirmRenameTemplate()"
+                  (keydown.enter)="confirmRenameTemplate()"
+                  (keydown.escape)="cancelRenameTemplate()"
+                />
+              </ng-template>
+            </button>
+            <button class="add-tab-btn" (click)="addTemplate()" title="新增提示词模板">+</button>
+          </div>
+        </div>
+
+        <!-- 当前 template 编辑器 -->
+        <div class="form-panel" *ngIf="templateFormData">
+          <div class="form-group">
+            <label>模板说明</label>
+            <input
+              type="text"
+              [(ngModel)]="templateFormData.description"
+              placeholder="用于描述当前模板的特点"
+              class="input-field"
+            />
+          </div>
+
+          <div class="form-group">
+            <label>提示词内容</label>
+            <textarea
+              [(ngModel)]="templateFormData.content"
+              class="template-textarea"
+              rows="12"
+            ></textarea>
+            <div class="field-tip">模板内容只有点击底部"保存"后才会真正写入后端，切换页签或移出焦点都不会自动保存。</div>
+          </div>
+
+          <div class="section-subheader">可用变量说明</div>
+          <div class="variables-list" *ngIf="templateFormData.variables && templateFormData.variables.length > 0">
+            <div class="variable-item" *ngFor="let variable of templateFormData.variables">
+              <code>{{ getVariableToken(variable.name) }}</code>
+              <span>{{ variable.description }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 底部状态栏和操作区 -->
+    <div class="dialog-footer">
+      <div class="status-bar" [class.success]="statusMessage.includes('✅')" [class.error]="statusMessage.includes('❌') || statusMessage.includes('⚠️')">
+        {{ statusMessage || '联通参数和提示词模板都需要点击"保存"后才会写入后端。' }}
+      </div>
+      <button class="secondary-btn" (click)="onCancel()">取消</button>
+      <button class="primary-btn" (click)="saveConfig()" [disabled]="saving">
+        {{ saving ? '保存中...' : '保存' }}
+      </button>
+    </div>
+  </div>
+</div>

@@ -196,19 +196,29 @@
       <div class="section-header" style="margin-bottom: 12px">
         <div class="section-title" style="margin-bottom: 0">🧩 素材准备</div>
 
-        <button
-          class="blue-action-btn ai-generate-btn"
-          [class.loading]="aiGenerating"
-          [disabled]="aiGenerating || !canAiGenerate"
-          (click)="onAiGenerate()"
-          [title]="
-            canAiGenerate ? 'AI自动生成书脊和封底图片' : '请先上传封面素材'
-          "
-        >
-          <span class="btn-spinner" *ngIf="aiGenerating"></span>
-          <span *ngIf="!aiGenerating">✨</span>
-          {{ aiGenerating ? aiProgressText : "AI 生成书脊 & 封底" }}
-        </button>
+        <div class="ai-actions">
+          <button
+            class="gear-btn"
+            (click)="openAiConfig()"
+            title="AI 配置"
+          >
+            <i class="pi pi-cog"></i>
+          </button>
+
+          <button
+            class="blue-action-btn ai-generate-btn"
+            [class.loading]="aiGenerating"
+            [disabled]="aiGenerating || !canAiGenerate"
+            (click)="onAiGenerateSpread()"
+            [title]="
+              canAiGenerate ? 'AI自动生成书脊和封底图片' : '请先上传封面素材'
+            "
+          >
+            <span class="btn-spinner" *ngIf="aiGenerating"></span>
+            <span *ngIf="!aiGenerating">✨</span>
+            {{ aiGenerating ? aiProgressText : "AI 生成书脊 & 封底" }}
+          </button>
+        </div>
       </div>
 
       <div class="ai-status-bar ai-status-error" *ngIf="aiLastResult === 'error'">
@@ -485,6 +495,24 @@
     </div>
   </div>
 </div>
+
+<app-gemini-config-dialog
+  [visible]="aiConfigVisible"
+  [config]="aiConfigBundle"
+  [prompts]="aiConfigBundle?.prompts"
+  (save)="onAiConfigSave($event)"
+  (close)="closeAiConfig()"
+></app-gemini-config-dialog>
+
+<app-gemini-crop-dialog
+  [visible]="aiCropVisible"
+  [spreadImageUrl]="spreadPreview?.imageUrl || ''"
+  [spreadWidth]="spreadPreview?.spreadWidth || 0"
+  [spreadHeight]="spreadPreview?.spreadHeight || 0"
+  [initialLines]="spreadPreview?.cropLines || null"
+  (save)="onCropSave($event)"
+  (close)="closeCrop()"
+></app-gemini-crop-dialog>
 
 <!-- ===================== [V1.8 问题1] Lightbox 遮罩层 ===================== -->
 <div class="lightbox-overlay" *ngIf="lightboxUrl" (click)="closeLightbox()">
