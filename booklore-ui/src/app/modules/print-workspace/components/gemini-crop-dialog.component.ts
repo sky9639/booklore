@@ -99,11 +99,18 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges {
       return;
     }
 
-    const maxWidth = 1120;
-    const maxHeight = 720;
-    const scaleX = maxWidth / this.spreadWidth;
-    const scaleY = maxHeight / this.spreadHeight;
-    this.scale = Math.min(scaleX, scaleY, 1);
+    // 获取可用画布区域（canvas-shell 的实际尺寸）
+    // 假设 canvas-shell 占据大部分对话框宽度，预留右侧预览区域
+    const availableWidth = Math.max(window.innerWidth * 0.6, 800);  // 至少800px
+    const availableHeight = Math.max(window.innerHeight * 0.7, 600); // 至少600px
+
+    // 计算缩放比例，确保展开图铺满画布
+    const scaleX = availableWidth / this.spreadWidth;
+    const scaleY = availableHeight / this.spreadHeight;
+
+    // 使用较小的缩放比例，确保完整显示，但不限制最大为1
+    this.scale = Math.min(scaleX, scaleY);
+
     this.displayWidth = Math.round(this.spreadWidth * this.scale);
     this.displayHeight = Math.round(this.spreadHeight * this.scale);
   }
