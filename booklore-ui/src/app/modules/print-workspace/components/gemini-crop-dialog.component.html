@@ -13,20 +13,26 @@
         <div class="panel-toolbar">
           <div class="toolbar-copy">
             <div class="section-header">展开图主视图</div>
-            <div class="canvas-hint">拖动分界线调整区域；方向键微调 1px，Shift + 方向键微调 10px。</div>
+            <div class="canvas-hint">
+              拖动分界线调整区域；方向键微调 1px，Shift + 方向键微调 10px。
+              <br>
+              <strong>滚轮缩放</strong>，<strong>Shift + 左键拖拽</strong>或<strong>中键拖拽</strong>移动画布。
+            </div>
           </div>
           <div class="line-legend">
             <span class="legend-chip vertical">蓝线：封底左 / 共享线 / 书脊右</span>
             <span class="legend-chip horizontal">橙线：上下边界</span>
+            <button class="reset-zoom-btn" (click)="resetZoom()" title="重置缩放">
+              重置视图 ({{ (zoom * 100).toFixed(0) }}%)
+            </button>
           </div>
         </div>
 
-        <div class="canvas-shell">
+        <div class="canvas-shell" (wheel)="onCanvasWheel($event)">
           <div
             class="crop-canvas"
-            [style.width.px]="displayWidth"
-            [style.height.px]="displayHeight"
-            (click)="onCanvasClick($event)"
+            [ngStyle]="getCanvasContainerStyle()"
+            (mousedown)="onCanvasMouseDown($event)"
           >
             <img
               [src]="spreadImageUrl"
@@ -34,6 +40,7 @@
               class="spread-image"
               [style.width.px]="displayWidth"
               [style.height.px]="displayHeight"
+              draggable="false"
             />
 
             <div

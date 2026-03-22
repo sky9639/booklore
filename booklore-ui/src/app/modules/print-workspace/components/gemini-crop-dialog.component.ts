@@ -1,5 +1,6 @@
 import { Component, EventEmitter, Input, Output, OnInit, OnDestroy, HostListener, OnChanges, SimpleChanges } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 
 interface CropLine {
   id: string;
@@ -12,7 +13,7 @@ interface CropLine {
 @Component({
   selector: 'app-gemini-crop-dialog',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, FormsModule],
   templateUrl: './gemini-crop-dialog.component.html',
   styleUrls: ['./gemini-crop-dialog.component.scss'],
 })
@@ -28,6 +29,16 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges {
   displayWidth = 0;
   displayHeight = 0;
   scale = 1;
+
+  // 缩放和拖拽相关
+  zoom = 1.0;  // 当前缩放级别（0.25 - 4.0）
+  panX = 0;    // 画布X偏移
+  panY = 0;    // 画布Y偏移
+  isPanning = false;  // 是否正在拖拽画布
+  panStartX = 0;
+  panStartY = 0;
+  panStartOffsetX = 0;
+  panStartOffsetY = 0;
 
   lines: CropLine[] = [];
   selectedLineId: string | null = null;
@@ -399,10 +410,106 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges {
 
   onClose(): void {
     this.onDocumentMouseUp();
+    this.onStopPanning();
     this.revokePreviewUrls();
     this.selectedLineId = null;
     this.draggingLineId = null;
+    this.zoom = 1.0;
+    this.panX = 0;
+    this.panY = 0;
     this.close.emit();
+  }
+
+  /**
+   * 滚轮缩放
+   */
+  onCanvasWheel(event: WheelEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const delta = event.deltaY > 0 ? -0.1 : 0.1;
+    const newZoom = Math.max(0.25, Math.min(4.0, this.zoom + delta));
+
+    // 以鼠标位置为中心缩放
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const mouseX = event.clientX - rect.left;
+    const mouseY = event.clientY - rect.top;
+
+    // 计算缩放前后鼠标在画布上的相对位置
+    const beforeX = (mouseX - this.panX) / this.zoom;
+    const beforeY = (mouseY - this.panY) / this.zoom;
+
+    this.zoom = newZoom;
+
+    // 调整偏移，保持鼠标位置不变
+    this.panX = mouseX - beforeX * this.zoom;
+    this.panY = mouseY - beforeY * this.zoom;
+  }
+
+  /**
+   * 开始拖拽画布（鼠标中键或空格+左键）
+   */
+  onCanvasMouseDown(event: MouseEvent): void {
+    // 空格+左键 或 中键拖拽画布
+    if ((event.button === 0 && event.shiftKey) || event.button === 1) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.startPanning(event);
+      return;
+    }
+
+    // 左键点击空白区域取消选中
+    if (event.button === 0 && (event.target as HTMLElement).classList.contains('crop-canvas')) {
+      this.selectedLineId = null;
+    }
+  }
+
+  private startPanning(event: MouseEvent): void {
+    this.isPanning = true;
+    this.panStartX = event.clientX;
+    this.panStartY = event.clientY;
+    this.panStartOffsetX = this.panX;
+    this.panStartOffsetY = this.panY;
+
+    document.addEventListener('mousemove', this.onPanningMouseMove);
+    document.addEventListener('mouseup', this.onStopPanning);
+  }
+
+  private onPanningMouseMove = (event: MouseEvent): void => {
+    if (!this.isPanning) return;
+
+    const dx = event.clientX - this.panStartX;
+    const dy = event.clientY - this.panStartY;
+
+    this.panX = this.panStartOffsetX + dx;
+    this.panY = this.panStartOffsetY + dy;
+  };
+
+  private onStopPanning = (): void => {
+    this.isPanning = false;
+    document.removeEventListener('mousemove', this.onPanningMouseMove);
+    document.removeEventListener('mouseup', this.onStopPanning);
+  };
+
+  /**
+   * 重置缩放和偏移
+   */
+  resetZoom(): void {
+    this.zoom = 1.0;
+    this.panX = 0;
+    this.panY = 0;
+  }
+
+  /**
+   * 获取画布容器样式（应用缩放和偏移）
+   */
+  getCanvasContainerStyle(): any {
+    return {
+      transform: `translate(${this.panX}px, ${this.panY}px) scale(${this.zoom})`,
+      transformOrigin: '0 0',
+      width: `${this.displayWidth}px`,
+      height: `${this.displayHeight}px`,
+    };
   }
 
   private revokePreviewUrls(): void {
