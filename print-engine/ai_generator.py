@@ -386,16 +386,37 @@ def _extract_image_from_response(data: dict, target_size: Optional[tuple[int, in
     raise RuntimeError("Gemini 响应中未找到图片数据")
 
 
-def _save_image(path: Path, image: Image.Image) -> None:
+def _save_image(path: Path, image: Image.Image, dpi: int = 400) -> None:
+    """
+    保存图像到指定路径，并设置DPI元数据。
+
+    Args:
+        path: 保存路径
+        image: PIL图像对象
+        dpi: 输出DPI（默认400）
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(path, format="PNG", dpi=(400, 400))
+    image.save(path, format="PNG", dpi=(dpi, dpi))
 
 
-def _save_generated_image(print_root: str, category: str, image: Image.Image, prefix: str) -> str:
+def _save_generated_image(print_root: str, category: str, image: Image.Image, prefix: str, dpi: int = 400) -> str:
+    """
+    保存生成的素材图像。
+
+    Args:
+        print_root: 打印根目录
+        category: 素材类别（cover/spine/back）
+        image: PIL图像对象
+        prefix: 文件名前缀
+        dpi: 输出DPI（书脊建议600，封面/封底300-400）
+
+    Returns:
+        保存的文件名
+    """
     target_dir = Path(print_root) / category
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{prefix}_{category}_{timestamp}.png"
-    _save_image(target_dir / filename, image)
+    _save_image(target_dir / filename, image, dpi=dpi)
     return filename
 
 
@@ -465,7 +486,22 @@ def crop_gemini_spread(
     page_h: int,
     spine_w: int,
     crop_lines: Optional[dict] = None,
+    spine_dpi: int = 600,
 ) -> tuple[Image.Image, Image.Image, Image.Image, dict]:
+    """
+    裁切 Gemini 生成的展开图，分离出封面、封底、书脊。
+
+    Args:
+        spread: 展开图
+        page_w: 目标页面像素宽度（@300DPI）
+        page_h: 目标页面像素高度（@300DPI）
+        spine_w: 目标书脊像素宽度（@300DPI）
+        crop_lines: 裁切线坐标
+        spine_dpi: 书脊输出DPI（默认600，保持文字清晰）
+
+    Returns:
+        (front_img, back_img, spine_img, crop_lines)
+    """
     if crop_lines is None:
         crop_lines = _guess_crop_lines(spread.size, page_w, page_h, spine_w)
 
@@ -485,9 +521,16 @@ def crop_gemini_spread(
     spine_raw = spread.crop((x2, y1, x3, y2)).convert("RGB")
     front_raw = spread.crop((x3, y1, x4, y2)).convert("RGB")
 
+    # 封面/封底：缩放到目标尺寸 @300DPI
     back_img = _resize_output_image(back_raw, page_w, page_h)
-    spine_img = _resize_output_image(spine_raw, spine_w, page_h)
     front_img = _resize_output_image(front_raw, page_w, page_h)
+
+    # 书脊：保持裁切区域原始宽度，按 spine_dpi 缩放高度
+    # spine_dpi=600 时，6mm 书脊 ≈ 142px（比 300DPI 的 71px 多一倍细节）
+    spine_px_w = spine_raw.width  # 保持裁切区域原始宽度
+    spine_px_h = max(1, int(spine_raw.height * spine_dpi / 300))
+    spine_img = spine_raw.resize((spine_px_w, spine_px_h), Image.Resampling.LANCZOS)
+
     return front_img, back_img, spine_img, crop_lines
 
 
@@ -586,13 +629,18 @@ def generate_spread_preview(
     progress_callback: Optional[Callable[[int, str], None]] = None,
     template_id: Optional[str] = None,
 ) -> dict:
+    """
+    生成 Gemini 展开图预览（用于裁切工具）。
+
+    使用300 DPI作为基准计算书脊宽度。
+    """
     cover_path = Path(print_root) / "cover" / cover_filename
     if not cover_path.exists():
         raise FileNotFoundError(f"封面图不存在: {cover_path}")
 
     cover = Image.open(cover_path).convert("RGB")
     page_w, page_h = TRIM_SIZE_PX.get(trim_size, TRIM_SIZE_PX["A5"])
-    spine_px = max(1, round(spine_width_mm * 400 / 25.4))
+    spine_px = max(1, round(spine_width_mm * 300 / 25.4))  # 基准DPI=300
 
     if progress_callback:
         progress_callback(0, "开始生成 Gemini 展开图...")
@@ -629,13 +677,18 @@ def save_cropped_materials(
     vertical_lines: list[int],
     horizontal_lines: list[int],
 ) -> dict:
+    """
+    保存用户裁切后的素材（封面、书脊、封底）。
+
+    书脊使用600 DPI保存，确保文字清晰；封面/封底使用300 DPI。
+    """
     spread_path = Path(print_root) / "preview" / spread_filename
     if not spread_path.exists():
         raise FileNotFoundError(f"展开图不存在: {spread_path}")
 
     spread = Image.open(spread_path).convert("RGB")
     page_w, page_h = TRIM_SIZE_PX.get(trim_size, TRIM_SIZE_PX["A5"])
-    spine_px = max(1, round(spine_width_mm * 400 / 25.4))
+    spine_px = max(1, round(spine_width_mm * 300 / 25.4))  # 基准DPI=300
 
     _front_img, back_img, spine_img, crop_lines = crop_gemini_spread(
         spread,
@@ -643,10 +696,13 @@ def save_cropped_materials(
         page_h,
         spine_px,
         crop_lines={"vertical": vertical_lines, "horizontal": horizontal_lines},
+        spine_dpi=600,  # 书脊使用600 DPI，保持文字清晰
     )
 
-    back_filename = _save_generated_image(print_root, "back", back_img, "ai")
-    spine_filename = _save_generated_image(print_root, "spine", spine_img, "ai")
+    # 封底使用标准300 DPI
+    back_filename = _save_generated_image(print_root, "back", back_img, "ai", dpi=300)
+    # 书脊使用600 DPI，文字更清晰
+    spine_filename = _save_generated_image(print_root, "spine", spine_img, "ai", dpi=600)
 
     return {
         "back_filename": back_filename,
@@ -670,6 +726,8 @@ def generate_ai_material(
     兼容旧调用入口：
     当前仍可按 target=spine/back 调用，但内部会先生成整张展开图，再自动按初始裁切线裁切。
     这样能最大限度减少对现有异步任务流程的影响。
+
+    书脊使用600 DPI保存，封底使用300 DPI。
     """
     del count, quality
 
@@ -678,7 +736,7 @@ def generate_ai_material(
         raise FileNotFoundError(f"封面图不存在: {cover_path}")
 
     page_w, page_h = TRIM_SIZE_PX.get(trim_size, TRIM_SIZE_PX["A5"])
-    spine_px = max(1, round(spine_width_mm * 400 / 25.4))
+    spine_px = max(1, round(spine_width_mm * 300 / 25.4))  # 基准DPI=300
     cover = Image.open(cover_path).convert("RGB")
 
     if progress_callback:
@@ -697,9 +755,9 @@ def generate_ai_material(
     _save_spread_preview(print_root, spread)
 
     if target == "back":
-        filename = _save_generated_image(print_root, "back", back_img, "ai")
+        filename = _save_generated_image(print_root, "back", back_img, "ai", dpi=300)
     elif target == "spine":
-        filename = _save_generated_image(print_root, "spine", spine_img, "ai")
+        filename = _save_generated_image(print_root, "spine", spine_img, "ai", dpi=600)
     else:
         raise ValueError("target 必须为 spine 或 back")
 
