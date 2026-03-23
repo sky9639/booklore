@@ -42,3 +42,10 @@ Dockerfile.ci
 entrypoint.sh
 .dockerignore
 .gitattributes
+
+# ==========================
+# 5. 测试/缓存文件（不提交）
+# ==========================
+print-engine/test/
+shared/data/
+*.backup_*

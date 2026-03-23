@@ -43,6 +43,10 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
   panStartY = 0;
   panStartOffsetX = 0;
   panStartOffsetY = 0;
+  blankAreaPointerDown = false;
+  blankAreaPanStarted = false;
+  blankAreaStartX = 0;
+  blankAreaStartY = 0;
 
   lines: CropLine[] = [];
   selectedLineId: string | null = null;
@@ -69,6 +73,7 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
   saving = false;
 
   private readonly minDisplayGap = 8;
+  private readonly blankAreaDragThreshold = 5;
   coverReferenceStyle: Record<string, string> | null = null;
 
   constructor() {}
@@ -86,6 +91,8 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
 
   ngOnDestroy(): void {
     this.onDocumentMouseUp();
+    this.resetBlankAreaPointerState();
+    this.onStopPanning();
     this.revokePreviewUrls();
   }
 
@@ -313,11 +320,42 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
     document.removeEventListener('mouseup', this.onDocumentMouseUp);
   };
 
-  onCanvasClick(event: MouseEvent): void {
-    if ((event.target as HTMLElement).classList.contains('crop-canvas')) {
+  private resetBlankAreaPointerState(): void {
+    this.blankAreaPointerDown = false;
+    this.blankAreaPanStarted = false;
+    this.blankAreaStartX = 0;
+    this.blankAreaStartY = 0;
+    document.removeEventListener('mousemove', this.onBlankAreaMouseMove);
+    document.removeEventListener('mouseup', this.onBlankAreaMouseUp);
+  }
+
+  private onBlankAreaMouseMove = (event: MouseEvent): void => {
+    if (!this.blankAreaPointerDown || this.blankAreaPanStarted) {
+      return;
+    }
+
+    const dx = event.clientX - this.blankAreaStartX;
+    const dy = event.clientY - this.blankAreaStartY;
+    if (Math.hypot(dx, dy) < this.blankAreaDragThreshold) {
+      return;
+    }
+
+    this.blankAreaPanStarted = true;
+    this.panStartX = this.blankAreaStartX;
+    this.panStartY = this.blankAreaStartY;
+    this.panStartOffsetX = this.panX;
+    this.panStartOffsetY = this.panY;
+    this.startPanning(event);
+    this.onPanningMouseMove(event);
+  };
+
+  private onBlankAreaMouseUp = (): void => {
+    const shouldDeselect = this.blankAreaPointerDown && !this.blankAreaPanStarted;
+    this.resetBlankAreaPointerState();
+    if (shouldDeselect) {
       this.selectedLineId = null;
     }
-  }
+  };
 
   @HostListener('window:keydown', ['$event'])
   onKeyDown(event: KeyboardEvent): void {
@@ -482,6 +520,7 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
 
   private resetInteractionState(clearPreviews: boolean): void {
     this.onDocumentMouseUp();
+    this.resetBlankAreaPointerState();
     this.onStopPanning();
     if (clearPreviews) {
       this.revokePreviewUrls();
@@ -518,29 +557,44 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
   }
 
   /**
-   * 开始拖拽画布（鼠标中键或空格+左键）
+   * 开始拖拽画布（空白区域左键、Shift + 左键或鼠标中键）
    */
   onCanvasMouseDown(event: MouseEvent): void {
-    // 空格+左键 或 中键拖拽画布
-    if ((event.button === 0 && event.shiftKey) || event.button === 1) {
+    if (this.draggingLineId) {
+      return;
+    }
+
+    const target = event.target as HTMLElement;
+    const isCanvas = target.classList.contains('crop-canvas');
+
+    if (event.button === 1 || (event.button === 0 && event.shiftKey)) {
       event.preventDefault();
       event.stopPropagation();
+      this.resetBlankAreaPointerState();
       this.startPanning(event);
       return;
     }
 
-    // 左键点击空白区域取消选中
-    if (event.button === 0 && (event.target as HTMLElement).classList.contains('crop-canvas')) {
-      this.selectedLineId = null;
+    if (event.button === 0 && isCanvas) {
+      event.preventDefault();
+      this.resetBlankAreaPointerState();
+      this.blankAreaPointerDown = true;
+      this.blankAreaStartX = event.clientX;
+      this.blankAreaStartY = event.clientY;
+      document.addEventListener('mousemove', this.onBlankAreaMouseMove);
+      document.addEventListener('mouseup', this.onBlankAreaMouseUp);
     }
   }
 
   private startPanning(event: MouseEvent): void {
     this.isPanning = true;
-    this.panStartX = event.clientX;
-    this.panStartY = event.clientY;
-    this.panStartOffsetX = this.panX;
-    this.panStartOffsetY = this.panY;
+
+    if (!this.blankAreaPanStarted) {
+      this.panStartX = event.clientX;
+      this.panStartY = event.clientY;
+      this.panStartOffsetX = this.panX;
+      this.panStartOffsetY = this.panY;
+    }
 
     document.addEventListener('mousemove', this.onPanningMouseMove);
     document.addEventListener('mouseup', this.onStopPanning);
@@ -558,6 +612,7 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
 
   private onStopPanning = (): void => {
     this.isPanning = false;
+    this.resetBlankAreaPointerState();
     document.removeEventListener('mousemove', this.onPanningMouseMove);
     document.removeEventListener('mouseup', this.onStopPanning);
   };
