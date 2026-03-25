@@ -169,7 +169,7 @@ public class GoogleParser implements BookParser {
             log.error("IO error while fetching metadata from Google Books API: {}", e.getMessage());
             return List.of();
         } catch (InterruptedException e) {
-            log.error("Request to Google Books API was interrupted");
+            log.info("Google Books API request interrupted (task cancelled)");
             Thread.currentThread().interrupt();
             return List.of();
         }
@@ -599,6 +599,17 @@ public class GoogleParser implements BookParser {
         return builder.build().toUri().toString();
     }
 
+    /**
+     * 等待速率限制间隔
+     *
+     * Google Books API 要求最小请求间隔 1.5 秒
+     *
+     * 中断处理：
+     * - 一旦等待被中断，立即恢复中断标志并抛出异常终止请求
+     * - 避免中断后继续发起请求导致连锁日志
+     *
+     * @throws RuntimeException 如果等待被中断（任务取消时）
+     */
     private void waitForRateLimit() {
         long now = System.currentTimeMillis();
         long timeSinceLastRequest = now - lastRequestTime.get();
@@ -607,6 +618,7 @@ public class GoogleParser implements BookParser {
                 Thread.sleep(MIN_REQUEST_INTERVAL_MS - timeSinceLastRequest);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                throw new RuntimeException("Rate limit wait interrupted", e);
             }
         }
         lastRequestTime.set(System.currentTimeMillis());

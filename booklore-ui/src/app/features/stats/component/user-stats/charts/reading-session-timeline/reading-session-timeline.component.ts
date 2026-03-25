@@ -7,13 +7,11 @@ import {FormsModule} from '@angular/forms';
 import {Tooltip} from 'primeng/tooltip';
 import {
   addWeeks,
-  endOfISOWeek,
+  endOfWeek,
   getISOWeek,
   getISOWeeksInYear,
   getISOWeekYear,
-  setISOWeek,
-  setISOWeekYear,
-  startOfISOWeek
+  startOfWeek
 } from 'date-fns';
 import {BookType} from '../../../../../book/model/book.model';
 import {ReadingSessionTimelineResponse, UserStatsService} from '../../../../../settings/user-management/user-stats.service';
@@ -182,12 +180,14 @@ export class ReadingSessionTimelineComponent implements OnInit {
   }
 
   private updateDateFromYearAndWeek(): void {
-    this.currentDate = setISOWeek(setISOWeekYear(new Date(), this.currentYear), this.currentWeek);
+    const jan4 = new Date(this.currentYear, 0, 4);
+    const mondayOfWeek1 = startOfWeek(jan4, { weekStartsOn: 1 });
+    this.currentDate = addWeeks(mondayOfWeek1, this.currentWeek - 1);
   }
 
   public getWeekDateRange(): string {
-    const weekStart = startOfISOWeek(this.currentDate);
-    const weekEnd = endOfISOWeek(this.currentDate);
+    const weekStart = startOfWeek(this.currentDate, { weekStartsOn: 1 });
+    const weekEnd = endOfWeek(this.currentDate, { weekStartsOn: 1 });
 
     const formatDate = (date: Date) => {
       const month = date.toLocaleDateString('en-US', {month: 'short'});

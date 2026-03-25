@@ -326,7 +326,37 @@ public class MetadataRefreshService {
         AppSettings appSettings = appSettingService.getAppSettings();
         Set<MetadataProvider> allProviders = EnumSet.noneOf(MetadataProvider.class);
         allProviders.addAll(getAllProvidersUsingIndividualFields(refreshOptions, appSettings));
-        return new ArrayList<>(allProviders);
+        return prioritizeFallbackProviders(new ArrayList<>(allProviders));
+    }
+
+    /**
+     * 保持现有 provider 集合不变，只调整执行顺序：
+     * - 更稳定的 provider（如 Google / Amazon）优先
+     * - GoodReads 放到后面作为兜底
+     * 这样不影响前端触发入口，只降低 GoodReads 在自动链路中的触发优先级。
+     */
+    public List<MetadataProvider> prioritizeFallbackProviders(List<MetadataProvider> providers) {
+        if (providers == null || providers.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<MetadataProvider> ordered = new ArrayList<>(providers);
+        ordered.sort(Comparator.comparingInt(this::providerPriority));
+        return ordered;
+    }
+
+    private int providerPriority(MetadataProvider provider) {
+        return switch (provider) {
+            case Google -> 10;
+            case Amazon -> 20;
+            case Hardcover -> 30;
+            case Comicvine -> 40;
+            case Douban -> 50;
+            case Lubimyczytac -> 60;
+            case Ranobedb -> 70;
+            case Audible -> 80;
+            case GoodReads -> 90;
+        };
     }
 
     protected Set<MetadataProvider> getAllProvidersUsingIndividualFields(MetadataRefreshOptions refreshOptions, AppSettings appSettings) {

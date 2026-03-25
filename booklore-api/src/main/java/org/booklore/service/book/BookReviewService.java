@@ -87,6 +87,7 @@ public class BookReviewService {
                 .filter(MetadataPublicReviewsSettings.ReviewProviderConfig::isEnabled)
                 .map(MetadataPublicReviewsSettings.ReviewProviderConfig::getProvider)
                 .collect(Collectors.toList());
+        providers = metadataRefreshService.prioritizeFallbackProviders(providers);
 
         Map<MetadataProvider, BookMetadata> metadataMap = metadataRefreshService.fetchMetadataForBook(providers, bookEntity);
 

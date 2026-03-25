@@ -1,14 +1,9 @@
 package org.booklore.print;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.File;
 import java.io.FileInputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -67,6 +62,9 @@ public class PrintController {
      * 上传封面 / 书脊 / 封底素材
      * ===============================
      * POST /api/v1/print/{bookId}/workspace/upload/{category}
+     *
+     * 注意：此方法通过 print-engine 端点更新 workspace.json，
+     * print-engine 是 workspace.json 的唯一写入者。
      */
     @PostMapping("/{bookId}/workspace/upload/{category}")
     public ResponseEntity<?> uploadMaterial(
@@ -98,33 +96,9 @@ public class PrintController {
                 );
             }
 
-            Path printRoot = fullPath.getParent().resolve(".print");
-            Path targetDir = printRoot.resolve(category);
-            targetDir.toFile().mkdirs();
-
-            // 获取原始文件名和扩展名
-            String original = file.getOriginalFilename();
-            if (original == null) original = "image.jpg";
-
-            // 提取扩展名
-            String extension = "";
-            int dotIndex = original.lastIndexOf('.');
-            if (dotIndex > 0 && dotIndex < original.length() - 1) {
-                extension = original.substring(dotIndex); // 包含点号，如 ".jpg"
-            } else {
-                extension = ".jpg"; // 默认扩展名
-            }
-
-            // 使用时间戳 + 扩展名作为文件名，避免特殊字符问题
-            String filename = System.currentTimeMillis() + extension;
-            Path target = targetDir.resolve(filename);
-            file.transferTo(target.toFile());
-
-            Map<String, Object> workspace = updateWorkspaceJson(
-                printRoot,
-                category,
-                filename
-            );
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("book_path", fullPath.toString());
+            Map<String, Object> workspace = client.uploadMaterial(category, payload, file);
             return ResponseEntity.ok(workspace);
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(
@@ -436,57 +410,14 @@ public class PrintController {
             }
 
             Path printRoot = fullPath.getParent().resolve(".print");
-            Path workspaceFile = printRoot.resolve("workspace.json");
-
-            ObjectMapper mapper = new ObjectMapper();
-            if (!Files.exists(workspaceFile)) {
-                return ResponseEntity.badRequest().body(
-                    Map.of("error", "workspace.json not found")
-                );
-            }
-
-            ObjectNode workspace = (ObjectNode) mapper.readTree(
-                workspaceFile.toFile()
-            );
-
-            if (workspace.has(category)) {
-                ObjectNode section = (ObjectNode) workspace.get(category);
-
-                // 从 history 删除
-                if (section.has("history")) {
-                    ArrayNode history = (ArrayNode) section.get("history");
-                    for (int i = 0; i < history.size(); i++) {
-                        if (filename.equals(history.get(i).asText())) {
-                            history.remove(i);
-                            break;
-                        }
-                    }
-                }
-
-                // 若删除的是 selected，自动切换到 history 第一个
-                if (
-                    section.has("selected") && !section.get("selected").isNull()
-                ) {
-                    if (filename.equals(section.get("selected").asText())) {
-                        ArrayNode history = section.has("history")
-                            ? (ArrayNode) section.get("history")
-                            : null;
-                        if (history != null && history.size() > 0) {
-                            section.put("selected", history.get(0).asText());
-                        } else {
-                            section.putNull("selected");
-                        }
-                    }
-                }
-            }
-
-            // 删除文件
             Files.deleteIfExists(printRoot.resolve(category).resolve(filename));
 
-            mapper
-                .writerWithDefaultPrettyPrinter()
-                .writeValue(workspaceFile.toFile(), workspace);
-            return ResponseEntity.ok(mapper.convertValue(workspace, Map.class));
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("book_path", fullPath.toString());
+            payload.put("category", category);
+            payload.put("filename", filename);
+            Map<String, Object> workspace = client.deleteMaterial(payload);
+            return ResponseEntity.ok(workspace);
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(
                 Map.of("error", e.getMessage())
@@ -499,6 +430,12 @@ public class PrintController {
      * 切换选中素材
      * ===============================
      * POST /api/v1/print/{bookId}/select?category=&filename=
+     *
+     * 封面优先级规则：
+     * - front_output.selected 优先于 cover.selected
+     * - 当用户选中 cover 时，清空 front_output.selected，避免优先级冲突
+     * - 前端显示封面时优先读 front_output.selected，其次才是 cover.selected
+     * - 这样保证 AI 裁切生成的 front_output 始终优先于原始 cover
      */
     @PostMapping("/{bookId}/select")
     public ResponseEntity<?> selectMaterial(
@@ -512,26 +449,18 @@ public class PrintController {
                 .orElseThrow(() -> new RuntimeException("Book not found"));
 
             Path fullPath = book.getFullFilePath();
-            Path printRoot = fullPath.getParent().resolve(".print");
-            Path workspaceFile = printRoot.resolve("workspace.json");
-
-            ObjectMapper mapper = new ObjectMapper();
-            ObjectNode workspace = (ObjectNode) mapper.readTree(
-                workspaceFile.toFile()
-            );
-            ObjectNode section = (ObjectNode) workspace.get(category);
-
-            if (section == null) {
+            if (fullPath == null) {
                 return ResponseEntity.badRequest().body(
-                    Map.of("error", "invalid category")
+                    Map.of("error", "Book file path could not be resolved")
                 );
             }
 
-            section.put("selected", filename);
-            mapper
-                .writerWithDefaultPrettyPrinter()
-                .writeValue(workspaceFile.toFile(), workspace);
-            return ResponseEntity.ok(mapper.convertValue(workspace, Map.class));
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("book_path", fullPath.toString());
+            payload.put("category", category);
+            payload.put("filename", filename);
+            Map<String, Object> workspace = client.selectMaterial(payload);
+            return ResponseEntity.ok(workspace);
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(
                 Map.of("error", e.getMessage())
@@ -560,79 +489,12 @@ public class PrintController {
         @RequestParam String target,
         @RequestBody PrintRequest request
     ) {
-        try {
-            if (
-                !target.equals("all") &&
-                !target.equals("spine") &&
-                !target.equals("back")
-            ) {
-                return ResponseEntity.badRequest().body(
-                    Map.of("error", "target 必须是 all / spine / back")
-                );
-            }
-
-            BookEntity book = bookRepository
-                .findById(bookId)
-                .orElseThrow(() -> new RuntimeException("Book not found"));
-
-            Path fullPath = book.getFullFilePath();
-            if (fullPath == null) {
-                return ResponseEntity.badRequest().body(
-                    Map.of("error", "Book file path could not be resolved")
-                );
-            }
-
-            // ── 1. 构造发给 print-engine 的 payload ──────────────────────────
-            Map<String, Object> payload = new HashMap<>();
-            payload.put("book_path", fullPath.toString());
-            payload.put("target", target);
-            payload.put(
-                "trim_size",
-                request.getTrimSize() != null ? request.getTrimSize() : "A5"
-            );
-
-            double paperThickness =
-                request.getPaperThickness() != null
-                    ? request.getPaperThickness()
-                    : 0.06;
-            int pageCount =
-                request.getPageCount() != null ? request.getPageCount() : 0;
-            payload.put("paper_thickness", paperThickness);
-            payload.put("book_page_count", pageCount);
-
-            if (book.getMetadata() != null) {
-                var meta = book.getMetadata();
-
-                payload.put(
-                    "book_title",
-                    meta.getTitle() != null ? meta.getTitle() : ""
-                );
-            }
-
-            byte[] imageBytes = client.aiGenerate(payload);
-
-            String timestamp = LocalDateTime.now().format(
-                DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")
-            );
-            String filename = "ai_" + target + "_" + timestamp + ".png";
-
-            Path printRoot = fullPath.getParent().resolve(".print");
-            Path targetDir = printRoot.resolve(target);
-            targetDir.toFile().mkdirs();
-            Files.write(targetDir.resolve(filename), imageBytes);
-
-            Map<String, Object> workspace = updateWorkspaceJson(
-                printRoot,
-                target,
-                filename
-            );
-
-            return ResponseEntity.ok(workspace);
-        } catch (Exception e) {
-            return ResponseEntity.internalServerError().body(
-                Map.of("error", e.getMessage())
-            );
-        }
+        return ResponseEntity.status(410).body(
+            Map.of(
+                "error",
+                "This endpoint is deprecated. Use /workspace/ai-generate/start instead."
+            )
+        );
     }
 
     /**
@@ -746,6 +608,36 @@ public class PrintController {
             payload.put("book_path", fullPath.toString());
 
             Map result = client.discardAiCropDraft(payload);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(
+                Map.of("error", e.getMessage())
+            );
+        }
+    }
+
+    @PostMapping("/{bookId}/workspace/ai-generate/history/delete")
+    public ResponseEntity<?> deleteAiCropHistory(
+        @PathVariable Long bookId,
+        @RequestBody Map<String, Object> body
+    ) {
+        try {
+            BookEntity book = bookRepository
+                .findById(bookId)
+                .orElseThrow(() -> new RuntimeException("Book not found"));
+
+            Path fullPath = book.getFullFilePath();
+            if (fullPath == null) {
+                return ResponseEntity.badRequest().body(
+                    Map.of("error", "Book file path could not be resolved")
+                );
+            }
+
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("book_path", fullPath.toString());
+            payload.put("spread_filename", body.get("spread_filename"));
+
+            Map result = client.deleteAiCropHistory(payload);
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(
@@ -930,11 +822,6 @@ public class PrintController {
 
     // ============================================================
 
-    /**
-     * 更新 workspace.json 中指定 category 的 selected + history。
-     * uploadMaterial 和 aiGenerateMaterial 共用此方法，确保逻辑完全一致。
-     */
-
     private java.io.InputStream openSseStream(String url)
         throws java.io.IOException {
         java.net.HttpURLConnection conn =
@@ -944,52 +831,6 @@ public class PrintController {
         conn.setRequestProperty("Accept", "text/event-stream");
         conn.setRequestProperty("Cache-Control", "no-cache");
         return conn.getInputStream();
-    }
-
-    private Map<String, Object> updateWorkspaceJson(
-        Path printRoot,
-        String category,
-        String filename
-    ) throws Exception {
-        Path workspaceFile = printRoot.resolve("workspace.json");
-        ObjectMapper mapper = new ObjectMapper();
-
-        ObjectNode workspace;
-        if (Files.exists(workspaceFile)) {
-            workspace = (ObjectNode) mapper.readTree(workspaceFile.toFile());
-        } else {
-            workspace = mapper.createObjectNode();
-        }
-
-        ObjectNode section = workspace.has(category)
-            ? (ObjectNode) workspace.get(category)
-            : mapper.createObjectNode();
-
-        // selected
-        section.put("selected", filename);
-
-        // history：去重 + 插入最前 + 限制5个
-        ArrayNode history = section.has("history")
-            ? (ArrayNode) section.get("history")
-            : mapper.createArrayNode();
-
-        for (int i = 0; i < history.size(); i++) {
-            if (filename.equals(history.get(i).asText())) {
-                history.remove(i);
-                break;
-            }
-        }
-        history.insert(0, filename);
-        if (history.size() > 5) history.remove(history.size() - 1);
-
-        section.set("history", history);
-        workspace.set(category, section);
-
-        mapper
-            .writerWithDefaultPrettyPrinter()
-            .writeValue(workspaceFile.toFile(), workspace);
-
-        return mapper.convertValue(workspace, Map.class);
     }
 
     /**

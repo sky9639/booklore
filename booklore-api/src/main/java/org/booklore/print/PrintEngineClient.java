@@ -1,10 +1,17 @@
 package org.booklore.print;
 
 import java.util.Map;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class PrintEngineClient {
@@ -79,16 +86,62 @@ public class PrintEngineClient {
         }
     }
 
-    public Map saveParams(Map<String, Object> payload) {
+    public Map uploadMaterial(
+        String category,
+        Map<String, Object> payload,
+        MultipartFile file
+    ) {
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+            MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+            payload.forEach(body::add);
+            body.add(
+                "file",
+                new ByteArrayResource(file.getBytes()) {
+                    @Override
+                    public String getFilename() {
+                        return file.getOriginalFilename();
+                    }
+                }
+            );
+
+            HttpEntity<MultiValueMap<String, Object>> request = new HttpEntity<>(body, headers);
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                BASE_URL + "/workspace/upload/" + category,
+                request,
+                Map.class
+            );
+            return response.getBody();
+        } catch (Exception e) {
+            throw new RuntimeException("uploadMaterial failed: " + e.getMessage(), e);
+        }
+    }
+
+    public Map selectMaterial(Map<String, Object> payload) {
         try {
             ResponseEntity<Map> response = restTemplate.postForEntity(
-                BASE_URL + "/workspace/params",
+                BASE_URL + "/workspace/material/select",
                 payload,
                 Map.class
             );
             return response.getBody();
         } catch (Exception e) {
-            return Map.of("status", "error", "message", e.getMessage());
+            throw new RuntimeException("selectMaterial failed: " + e.getMessage(), e);
+        }
+    }
+
+    public Map deleteMaterial(Map<String, Object> payload) {
+        try {
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                BASE_URL + "/workspace/material/delete",
+                payload,
+                Map.class
+            );
+            return response.getBody();
+        } catch (Exception e) {
+            throw new RuntimeException("deleteMaterial failed: " + e.getMessage(), e);
         }
     }
 
@@ -111,39 +164,6 @@ public class PrintEngineClient {
         } catch (Exception e) {
             throw new RuntimeException(
                 "aiGenerateStart failed: " + e.getMessage(),
-                e
-            );
-        }
-    }
-
-    /**
-     * AI 生成书脊 / 封底
-     *
-     * print-engine /ai-generate 直接返回 PNG bytes（Content-Type: image/png）
-     * Java 侧收到 bytes 后由 PrintController.aiGenerateMaterial() 负责：
-     *   - 命名文件：ai_{target}_{timestamp}.png
-     *   - 保存到 .print/{target}/
-     *   - 更新 workspace.json
-     *
-     * 使用独立的 aiRestTemplate（readTimeout = 300s）
-     */
-    public byte[] aiGenerate(Map<String, Object> payload) {
-        try {
-            ResponseEntity<byte[]> response = aiRestTemplate.postForEntity(
-                BASE_URL + "/ai-generate",
-                payload,
-                byte[].class
-            );
-            byte[] body = response.getBody();
-            if (body == null || body.length == 0) {
-                throw new RuntimeException(
-                    "AI generate returned empty response"
-                );
-            }
-            return body;
-        } catch (Exception e) {
-            throw new RuntimeException(
-                "AI generate failed: " + e.getMessage(),
                 e
             );
         }
@@ -274,6 +294,21 @@ public class PrintEngineClient {
             return body;
         } catch (Exception e) {
             throw new RuntimeException("discardAiCropDraft failed: " + e.getMessage(), e);
+        }
+    }
+
+    public Map deleteAiCropHistory(Map<String, Object> payload) {
+        try {
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                BASE_URL + "/workspace/ai-generate/history/delete",
+                payload,
+                Map.class
+            );
+            Map body = response.getBody();
+            if (body == null) throw new RuntimeException("deleteAiCropHistory returned null");
+            return body;
+        } catch (Exception e) {
+            throw new RuntimeException("deleteAiCropHistory failed: " + e.getMessage(), e);
         }
     }
 }

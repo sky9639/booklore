@@ -1,79 +1,98 @@
-<div class="dialog-overlay" *ngIf="visible" (click)="onClose()">
+<div class="dialog-overlay" *ngIf="visible">
   <div class="dialog crop-dialog" (click)="$event.stopPropagation()">
     <div class="dialog-header">
       <div class="header-copy">
-        <div class="dialog-title">调整 AI 生成裁切</div>
-        <div class="dialog-subtitle">关闭会丢弃未保存裁切。</div>
+        <div class="dialog-title">AI生图管理</div>
+        <div class="dialog-subtitle">生成展开图 · 裁切素材 · 历史管理</div>
       </div>
-      <button class="close-btn cache-close-btn" (click)="$event.stopPropagation(); onCacheClose()" aria-label="缓存并关闭裁切弹窗">×</button>
+      <div class="header-actions">
+        <button class="header-btn" (click)="$event.stopPropagation(); onOpenConfig()" title="AI 配置">
+          <i class="pi pi-cog"></i>
+          配置
+        </button>
+        <button
+          class="header-btn primary"
+          (click)="$event.stopPropagation(); onGenerate()"
+          [disabled]="generating"
+          title="生成新的 AI 展开图"
+        >
+          <span class="btn-spinner" *ngIf="generating"></span>
+          <span *ngIf="!generating">✨</span>
+          {{ generateButtonText }}
+        </button>
+      </div>
     </div>
 
     <div class="dialog-body crop-body">
+      <div class="history-panel">
+        <div class="history-panel-header">
+          <div class="section-header">历史生图浏览</div>
+          <div class="history-panel-subtitle">按最近生成时间排序，可切换继续裁切，也可删除旧的展开图。</div>
+        </div>
+
+        <div class="history-list" *ngIf="historyItems.length; else emptyHistory">
+          <button
+            type="button"
+            class="history-card"
+            *ngFor="let item of historyItems"
+            [class.active]="item.spreadFilename === activeSpreadFilename"
+            (click)="selectHistory(item.spreadFilename)"
+          >
+            <span class="history-delete-btn" (click)="deleteHistory(item.spreadFilename, $event)">×</span>
+            <div class="history-thumb-box">
+              <img [src]="item.imageUrl" class="history-thumb" draggable="false" />
+            </div>
+            <div class="history-meta">
+              <div class="history-name">{{ item.spreadFilename }}</div>
+              <div class="history-time" *ngIf="item.updatedAt">{{ item.updatedAt }}</div>
+            </div>
+          </button>
+        </div>
+
+        <ng-template #emptyHistory>
+          <div class="history-empty">暂无历史，点击 AI生图 开始</div>
+        </ng-template>
+      </div>
+
       <div class="workspace-panel">
-        <div class="panel-toolbar">
-          <div class="toolbar-copy">
-            <div class="section-header">展开图主视图</div>
-            <div class="canvas-hint">
-              <div class="hint-section">
-                <div class="hint-icon">裁</div>
-                <div class="hint-content">
-                  <div class="hint-title">裁切线操作</div>
-                  <div class="hint-main">拖动分界线调整区域，点击空白处可取消当前选中。</div>
-                  <div class="hint-sub">方向键微调 1px，Shift + 方向键微调 10px。</div>
-                </div>
-              </div>
-              <div class="hint-section">
-                <div class="hint-icon navigation">移</div>
-                <div class="hint-content">
-                  <div class="hint-title">视图操作</div>
-                  <div class="hint-main">滚轮缩放，左键拖拽空白区域即可移动画布。</div>
-                  <div class="hint-sub">同时保留 Shift + 左键 / 中键拖拽，便于兼容原有习惯。</div>
-                </div>
-              </div>
+        <div class="panel-toolbar compact-toolbar">
+          <div class="toolbar-copy compact-copy">
+            <div class="section-header">展开图精修</div>
+            <div class="toolbar-status-row">
+              <span class="focus-chip active-line">当前：{{ selectedLineLabel }}</span>
+              <span class="focus-chip vertical">蓝线：左右分区</span>
+              <span class="focus-chip horizontal">橙线：上下边界</span>
+              <span class="focus-chip">缩放 {{ (zoom * 100).toFixed(0) }}%</span>
+              <span class="focus-chip">左键拖动画布 · 滚轮缩放 · Esc取消选中</span>
+              <span class="focus-chip">方向键 1px · Shift 10px</span>
+            </div>
+            <div class="toolbar-status-inline" *ngIf="generating || generateErrorMessage">
+              <span class="status-chip loading" *ngIf="generating">{{ generateButtonText }}</span>
+              <span class="status-chip error" *ngIf="!generating && generateErrorMessage">生成失败：{{ generateErrorMessage }}</span>
             </div>
           </div>
-          <div class="line-legend">
-            <span class="legend-chip vertical">蓝线：封底左 / 共享线 / 书脊右</span>
-            <span class="legend-chip horizontal">橙线：上下边界</span>
-            <button class="toggle-reference-btn" (click)="toggleCoverReference()" [title]="showCoverReference ? '返回生成图' : '查看封面参考'">
-              {{ showCoverReference ? '返回生成图' : '查看封面参考' }}
-            </button>
+          <div class="toolbar-actions">
             <button class="reset-zoom-btn" (click)="resetZoom()" title="重置缩放">
-              重置视图 ({{ (zoom * 100).toFixed(0) }}%)
+              重置视图
             </button>
           </div>
         </div>
 
-        <div class="canvas-shell" #canvasShell (wheel)="onCanvasWheel($event)">
+        <div class="canvas-shell" #canvasShell (wheel)="onCanvasWheel($event)" (mousedown)="onCanvasMouseDown($event)">
           <div
             class="crop-canvas"
-            [ngStyle]="getCanvasContainerStyle()"
-            (mousedown)="onCanvasMouseDown($event)"
+            [style.transform]="canvasTransform"
+            [style.width.px]="displayWidth"
+            [style.height.px]="displayHeight"
           >
             <img
               [src]="spreadImageUrl"
               alt="AI 生成展开图"
               class="spread-image"
-              [class.reference-hidden]="showCoverReference"
               [style.width.px]="displayWidth"
               [style.height.px]="displayHeight"
               draggable="false"
             />
-
-            <div
-              class="cover-reference-box"
-              *ngIf="showCoverReference && coverReferenceStyle"
-              [ngStyle]="coverReferenceStyle"
-            >
-              <img
-                *ngIf="sourceCoverUrl"
-                [src]="sourceCoverUrl"
-                alt="原始封面参考"
-                class="cover-reference-image"
-                draggable="false"
-              />
-              <span class="cover-reference-label">原始封面参考</span>
-            </div>
 
             <div
               *ngFor="let line of lines"
@@ -82,7 +101,8 @@
               [class.dragging]="draggingLineId === line.id"
               [class.vertical]="line.type === 'vertical'"
               [class.horizontal]="line.type === 'horizontal'"
-              [ngStyle]="getLineStyle(line)"
+              [style.left.px]="line.type === 'vertical' ? line.position : null"
+              [style.top.px]="line.type === 'horizontal' ? line.position : null"
               (mousedown)="onLineMouseDown($event, line)"
               [title]="line.label"
             >
@@ -94,44 +114,44 @@
       </div>
 
       <div class="preview-panel">
-        <div class="status-card">
-          <div class="section-header">当前操作</div>
-          <div class="status-value">{{ selectedLineLabel }}</div>
-          <div class="status-note">点击任意分界线后，可继续拖动或用键盘精调。</div>
+        <div class="preview-card status-card">
+          <div class="section-header">裁切状态</div>
+          <div class="status-value">{{ previewStatusText }}</div>
+          <div class="status-note">右侧三预览会根据当前裁切线位置实时刷新，便于提前发现白边和边缘误差。</div>
         </div>
 
         <div class="preview-card">
           <div class="preview-title">封底预览</div>
           <div class="preview-image-box">
-            <img
-              *ngIf="backPreviewUrl"
-              [src]="backPreviewUrl"
-              (error)="onPreviewImageError('back')"
-              alt="封底预览"
-              class="preview-image"
-            />
-            <div *ngIf="!backPreviewUrl || previewLoadFailed.back" class="preview-placeholder ready">
-              <div class="placeholder-icon">封</div>
-              <div class="placeholder-title">封底预览区</div>
-              <div class="placeholder-desc">拖动分界线后，这里会实时显示当前裁切结果。</div>
+            <img *ngIf="backPreviewUrl" [src]="backPreviewUrl" class="preview-image" draggable="false" (error)="onPreviewImageError('back')" />
+            <div class="preview-placeholder ready" *ngIf="!backPreviewUrl">
+              <div class="placeholder-icon">背</div>
+              <div class="placeholder-title">封底预览</div>
+              <div class="placeholder-desc">{{ hasPreviewImage ? '拖动裁切线后将实时显示封底区域。' : '生成展开图后将在这里显示封底。' }}</div>
             </div>
           </div>
         </div>
 
-        <div class="preview-card spine-card">
+        <div class="preview-card">
           <div class="preview-title">书脊预览</div>
           <div class="preview-image-box spine-box">
-            <img
-              *ngIf="spinePreviewUrl"
-              [src]="spinePreviewUrl"
-              (error)="onPreviewImageError('spine')"
-              alt="书脊预览"
-              class="preview-image spine-image"
-            />
-            <div *ngIf="!spinePreviewUrl || previewLoadFailed.spine" class="preview-placeholder ready">
+            <img *ngIf="spinePreviewUrl" [src]="spinePreviewUrl" class="preview-image spine-image" draggable="false" (error)="onPreviewImageError('spine')" />
+            <div class="preview-placeholder ready" *ngIf="!spinePreviewUrl">
               <div class="placeholder-icon slim">脊</div>
-              <div class="placeholder-title">书脊预览区</div>
-              <div class="placeholder-desc">拖动共享线和书脊右边界，可精调书脊宽度与位置。</div>
+              <div class="placeholder-title">书脊预览</div>
+              <div class="placeholder-desc">{{ hasPreviewImage ? '适合检查书脊宽度、留白和文字是否居中。' : '生成展开图后将在这里显示书脊。' }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="preview-card">
+          <div class="preview-title">封面预览</div>
+          <div class="preview-image-box">
+            <img *ngIf="frontPreviewUrl" [src]="frontPreviewUrl" class="preview-image" draggable="false" (error)="onPreviewImageError('front')" />
+            <div class="preview-placeholder ready" *ngIf="!frontPreviewUrl">
+              <div class="placeholder-icon">封</div>
+              <div class="placeholder-title">封面预览</div>
+              <div class="placeholder-desc">{{ hasPreviewImage ? '拖动裁切线后将实时显示封面区域。' : '生成展开图后将在这里显示封面。' }}</div>
             </div>
           </div>
         </div>
@@ -139,9 +159,9 @@
     </div>
 
     <div class="dialog-footer">
-      <div class="footer-tip">缓存后下次可直接继续编辑，关闭会丢弃草稿。</div>
+      <div class="footer-tip">关闭仅隐藏弹窗并保留当前展开图；保存后会更新素材并保留历史展开图。</div>
       <div class="footer-actions">
-        <button class="secondary-btn" (click)="onClose()">关闭（丢弃草稿）</button>
+        <button class="secondary-btn" (click)="onClose()">关闭</button>
         <button class="primary-btn" (click)="onSave()" [disabled]="saving">
           {{ saving ? '保存中...' : '保存并应用裁切' }}
         </button>

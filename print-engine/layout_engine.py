@@ -13,7 +13,8 @@ def mm_to_px(mm_value):
 
 def generate_preview_layout(
     print_root,
-    cover_filename,
+    front_category,
+    front_filename,
     spine_filename,
     back_filename,
     spine_width_mm,
@@ -31,25 +32,27 @@ def generate_preview_layout(
     img = Image.new("RGB", (width_px, height_px), "white")
 
     # 检查文件是否存在，避免空图
-    cover_path = os.path.join(print_root, "cover", cover_filename) if cover_filename else None
+    front_path = os.path.join(print_root, front_category, front_filename) if front_category and front_filename else None
     spine_path = os.path.join(print_root, "spine", spine_filename) if spine_filename else None
 
-    if not cover_path or not os.path.exists(cover_path):
-        raise FileNotFoundError(f"Cover file not found: {cover_filename}")
+    if not front_path or not os.path.exists(front_path):
+        raise FileNotFoundError(f"Front output file not found: {front_filename}")
 
     if not spine_path or not os.path.exists(spine_path):
         raise FileNotFoundError(f"Spine file not found: {spine_filename}")
 
-    cover = Image.open(cover_path).resize(
-        (mm_to_px(trim_width_mm), height_px)
-    )
+    with Image.open(front_path) as front_image:
+        front = front_image.resize(
+            (mm_to_px(trim_width_mm), height_px)
+        )
 
-    spine = Image.open(spine_path).resize(
-        (mm_to_px(spine_width_mm), height_px)
-    )
+    with Image.open(spine_path) as spine_image:
+        spine = spine_image.resize(
+            (mm_to_px(spine_width_mm), height_px)
+        )
 
     img.paste(spine, (0, 0))
-    img.paste(cover, (mm_to_px(spine_width_mm), 0))
+    img.paste(front, (mm_to_px(spine_width_mm), 0))
 
     img.save(preview_path, dpi=(DPI, DPI))
 
@@ -58,7 +61,8 @@ def generate_preview_layout(
 
 def generate_layout(
     print_root,
-    cover_filename,
+    front_category,
+    front_filename,
     spine_filename,
     back_filename,
     spine_width_mm,
@@ -80,13 +84,13 @@ def generate_layout(
     output_pdf = os.path.join(print_root, filename)
     c = canvas.Canvas(output_pdf)
 
-    cover_path = os.path.join(print_root, "cover", cover_filename)
+    front_path = os.path.join(print_root, front_category, front_filename)
     spine_path = os.path.join(print_root, "spine", spine_filename)
     back_path = os.path.join(print_root, "back", back_filename)
 
     # 检查文件是否存在
-    if not os.path.exists(cover_path):
-        raise FileNotFoundError(f"Cover file not found: {cover_filename}")
+    if not os.path.exists(front_path):
+        raise FileNotFoundError(f"Front output file not found: {front_filename}")
     if not os.path.exists(spine_path):
         raise FileNotFoundError(f"Spine file not found: {spine_filename}")
     if not os.path.exists(back_path):
@@ -102,7 +106,7 @@ def generate_layout(
                     width=spine_width_mm * mm,
                     height=trim_height_mm * mm)
 
-        c.drawImage(ImageReader(cover_path),
+        c.drawImage(ImageReader(front_path),
                     spine_width_mm * mm, 0,
                     width=trim_width_mm * mm,
                     height=trim_height_mm * mm)
@@ -120,7 +124,7 @@ def generate_layout(
     else:
 
         c.setPageSize((trim_width_mm * mm, trim_height_mm * mm))
-        c.drawImage(ImageReader(cover_path), 0, 0,
+        c.drawImage(ImageReader(front_path), 0, 0,
                     width=trim_width_mm * mm,
                     height=trim_height_mm * mm)
         c.showPage()

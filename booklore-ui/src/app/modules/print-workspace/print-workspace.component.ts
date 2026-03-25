@@ -28,13 +28,56 @@ import {
   PrintService,
   WorkspaceState,
   PrintRequest,
+  AiCropHistoryItem,
 } from "./services/print.service";
 import { MaterialService } from "./services/material.service";
 
 import { MaterialSlotComponent } from "./components/material-slot.component";
 import { GeminiConfigDialogComponent } from "./components/gemini-config-dialog.component";
 import { GeminiCropDialogComponent } from "./components/gemini-crop-dialog.component";
-import { TrimSize } from "./models/workspace.model";
+import { TrimSize, SpreadPreviewItem } from "./models/workspace.model";
+import { calcSpineWidth } from "./utils/dimension.util";
+
+interface WorkspaceViewModel {
+  bookName?: string;
+  trimSize: TrimSize;
+  pageCount: number;
+  paperThickness: number;
+  spineWidth: number;
+  cover: {
+    selected: string | null;
+    url: string;
+    history: Array<{
+      filename: string;
+      type: "cover" | "front_output";
+      label: string;
+      active: boolean;
+    }>;
+    statusBadge: string;
+    usingFrontOutput: boolean;
+  };
+  frontOutput: {
+    selected: string | null;
+    url: string;
+  };
+  spine: {
+    selected: string | null;
+    url: string;
+    history: string[];
+  };
+  back: {
+    selected: string | null;
+    url: string;
+    history: string[];
+  };
+}
+
+interface AiGenerateAllRequest {
+  trimSize: TrimSize;
+  pageCount: number;
+  paperThickness: number;
+  target: "all";
+}
 
 @Component({
   selector: "app-print-workspace",
@@ -49,7 +92,12 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   @ViewChild('aiLogContent', { static: false }) aiLogContent?: ElementRef;
 
   private compositeCache = new Map<string, string>();
+  private compositeRenderToken = 0;
   private wsSub?: Subscription;
+  private lastWorkspaceRef: WorkspaceState | null = null;
+  private workspaceViewModelCache: WorkspaceViewModel | null = null;
+  private previewPagesCache: string[] = [];
+  private compositeCacheKey = '';
   compositeUrl = "";
   lightboxUrl = "";
 
@@ -88,15 +136,10 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   aiConfigVisible = false;
   aiCropVisible = false;
   aiConfigLoading = false;
-  aiConfigBundle: any = null;
-  spreadPreview: {
-    imageUrl: string;
-    spreadFilename: string;
-    spreadWidth: number;
-    spreadHeight: number;
-    cropLines: { vertical_lines: number[]; horizontal_lines: number[] };
-    sourceCoverUrl: string;
-  } | null = null;
+  aiConfigBundle: { runtime: any; prompts: any } | null = null;
+  cropSaving = false;
+  spreadHistory: SpreadPreviewItem[] = [];
+  spreadPreview: SpreadPreviewItem | null = null;
 
   get canAiGenerate(): boolean {
     return !!this.workspace?.cover?.selected;
@@ -125,9 +168,13 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     this.wsSub = this.workspaceState.workspace$.subscribe((ws) => {
       if (!ws) return;
       this.compositeCache.clear();
+      this.lastWorkspaceRef = ws;
+      this.workspaceViewModelCache = null;
+      this.previewPagesCache = [];
+      this.compositeCacheKey = '';
       this.refreshComposite();
-      // 强制触发变更检测，确保历史预览图可以正常切换
-      this.cdr.detectChanges();
+      this.syncSpreadHistoryFromWorkspace(ws);
+      this.syncSpreadPreviewWithHistory();
     });
 
     this.initWorkspace();
@@ -154,23 +201,50 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     return this.workspaceState.workspace;
   }
 
-  get workspaceViewModel() {
+  get workspaceViewModel(): WorkspaceViewModel | null {
     const ws = this.workspace;
     if (!ws) return null;
-    return {
+    if (this.workspaceViewModelCache && this.lastWorkspaceRef === ws) {
+      return this.workspaceViewModelCache;
+    }
+
+    const coverHistory = ws.cover?.history ?? [];
+    const frontOutputHistory = ws.front_output?.history ?? [];
+    const effectiveFront = this.material.getEffectiveFrontSelection(this.bookId, ws);
+    const effectiveFrontSelected = effectiveFront.selected;
+    const effectiveFrontUrl = effectiveFront.url;
+    const coverSelected = ws.cover?.selected ?? null;
+    const mergedCoverHistory = [
+      ...coverHistory.map((filename) => ({
+        filename,
+        type: 'cover' as const,
+        label: '原图',
+        active: effectiveFrontSelected === filename,
+      })),
+      ...frontOutputHistory.map((filename) => ({
+        filename,
+        type: 'front_output' as const,
+        label: '裁切',
+        active: effectiveFrontSelected === filename,
+      })),
+    ];
+
+    this.workspaceViewModelCache = {
       bookName: ws.book_name,
       trimSize: ws.trim_size,
       pageCount: ws.page_count,
       paperThickness: ws.paper_thickness,
       spineWidth: ws.spine_width_mm,
       cover: {
-        selected: ws.cover?.selected ?? null,
-        url: this.material.getAssetUrl(
-          this.bookId,
-          "cover",
-          ws.cover?.selected ?? "",
-        ),
-        history: ws.cover?.history ?? [],
+        selected: effectiveFrontSelected,
+        url: effectiveFrontUrl,
+        history: mergedCoverHistory,
+        statusBadge: effectiveFront.usingFrontOutput ? '当前输出' : '',
+        usingFrontOutput: effectiveFront.usingFrontOutput,
+      },
+      frontOutput: {
+        selected: effectiveFrontSelected,
+        url: effectiveFrontUrl,
       },
       spine: {
         selected: ws.spine?.selected ?? null,
@@ -191,15 +265,22 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
         history: ws.back?.history ?? [],
       },
     };
+
+    return this.workspaceViewModelCache;
   }
 
   get previewPages(): string[] {
     const ws = this.workspace;
     if (!ws) return [];
+    if (this.previewPagesCache.length && this.lastWorkspaceRef === ws && this.compositeCacheKey === this.compositeUrl) {
+      return this.previewPagesCache;
+    }
 
-    const coverUrl = ws.cover?.selected
-      ? this.material.getAssetUrl(this.bookId, "cover", ws.cover.selected)
-      : "";
+    const vm = this.workspaceViewModel;
+    if (!vm) {
+      return [];
+    }
+
     const spineUrl = ws.spine?.selected
       ? this.material.getAssetUrl(this.bookId, "spine", ws.spine.selected)
       : "";
@@ -208,46 +289,55 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       : "";
 
     if (ws.trim_size === "A4") {
-      return [coverUrl, spineUrl, backUrl];
+      this.previewPagesCache = [vm.cover.url, spineUrl, backUrl];
+      this.compositeCacheKey = this.compositeUrl;
+      return this.previewPagesCache;
     }
 
-    const firstPage = this.compositeUrl || coverUrl;
-    return [firstPage, backUrl];
+    const firstPage = this.compositeUrl || vm.cover.url;
+    this.previewPagesCache = [firstPage, backUrl];
+    this.compositeCacheKey = this.compositeUrl;
+    return this.previewPagesCache;
   }
 
   refreshComposite(): void {
+    const renderToken = ++this.compositeRenderToken;
     const ws = this.workspace;
     if (!ws || ws.trim_size === "A4") {
       this.compositeUrl = "";
+      this.compositeCacheKey = this.compositeUrl;
+      this.previewPagesCache = [];
       return;
     }
 
-    const coverUrl = ws.cover?.selected
-      ? this.material.getAssetUrl(this.bookId, "cover", ws.cover.selected)
-      : "";
+    const effectiveFront = this.material.getEffectiveFrontSelection(this.bookId, ws);
+    const effectiveFrontUrl = effectiveFront.url;
     const spineUrl = ws.spine?.selected
       ? this.material.getAssetUrl(this.bookId, "spine", ws.spine.selected)
       : "";
 
-    if (!coverUrl) {
+    if (!effectiveFrontUrl) {
       this.compositeUrl = "";
+      this.compositeCacheKey = this.compositeUrl;
+      this.previewPagesCache = [];
       return;
     }
 
-    const cacheKey = `${coverUrl}|${spineUrl}|${ws.spine_width_mm}`;
+    const cacheKey = `${effectiveFrontUrl}|${spineUrl}|${ws.spine_width_mm}`;
     if (this.compositeCache.has(cacheKey)) {
       this.compositeUrl = this.compositeCache.get(cacheKey)!;
+      this.compositeCacheKey = this.compositeUrl;
+      this.previewPagesCache = [];
       return;
     }
 
-    const pageW = this.preview.getPageWidth(ws as any);
-    const pageH = this.preview.getPageHeight(ws as any);
+    const pageW = this.preview.getPageWidth(ws);
+    const pageH = this.preview.getPageHeight(ws);
     const spineW = ws.spine_width_mm ?? 0;
 
     const CANVAS_H = 400;
     const scale = CANVAS_H / pageH;
     const coverPx = Math.round(pageW * scale);
-    // 无书脊素材时 spinePx = 0，canvas 只包含封面，不画任何书脊痕迹
     const spinePx = spineUrl ? Math.max(Math.round(spineW * scale), 2) : 0;
     const totalW = coverPx + spinePx;
 
@@ -269,14 +359,13 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       });
 
     const promises: Promise<HTMLImageElement | null>[] = [
-      loadImage(coverUrl),
+      loadImage(effectiveFrontUrl),
       spineUrl ? loadImage(spineUrl).catch(() => null) : Promise.resolve(null),
     ];
 
     Promise.all(promises)
       .then(([coverImg, spineImg]) => {
-        if (!coverImg) return;
-        // 印刷标准展开图：书脊在左，封面在右（与 PDF 生成顺序一致）
+        if (renderToken !== this.compositeRenderToken || !coverImg) return;
         if (spineImg && spinePx > 0) {
           ctx.drawImage(spineImg, 0, 0, spinePx, CANVAS_H);
           ctx.drawImage(coverImg, spinePx, 0, coverPx, CANVAS_H);
@@ -286,25 +375,28 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
         const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
         this.compositeCache.set(cacheKey, dataUrl);
         this.compositeUrl = dataUrl;
+        this.compositeCacheKey = this.compositeUrl;
+        this.previewPagesCache = [];
       })
       .catch(() => {
-        this.compositeUrl = coverUrl;
+        if (renderToken !== this.compositeRenderToken) return;
+        this.compositeUrl = effectiveFrontUrl;
+        this.compositeCacheKey = this.compositeUrl;
+        this.previewPagesCache = [];
       });
   }
 
   setTrim(size: TrimSize) {
     this.workspaceState.setTrim(size);
     this.workspaceState.recalcSpine();
-    const ws = this.workspace as any;
-    if (ws) ws.pdf_path = null;
+    this.workspaceState.clearPdfPath();
     this.refreshComposite();
     this.saveParams();
   }
 
   recalculateSpine() {
     this.workspaceState.recalcSpine();
-    const ws = this.workspace as any;
-    if (ws) ws.pdf_path = null;
+    this.workspaceState.clearPdfPath();
     this.saveParams();
     this.compositeCache.clear();
     this.refreshComposite();
@@ -312,24 +404,24 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
 
   getPageHeight(): number {
     if (!this.workspace) return 0;
-    return this.preview.getPageHeight(this.workspace as any);
+    return this.preview.getPageHeight(this.workspace);
   }
 
   getPageRatio(): string {
     if (!this.workspace) return "1/1";
-    return this.preview.getPageRatio(this.workspace as any);
+    return this.preview.getPageRatio(this.workspace);
   }
 
   getPreviewPageRatio(index: number): string {
     if (!this.workspace) return "1/1";
-    const w = this.preview.getPreviewPageWidth(this.workspace as any, index);
-    const h = this.preview.getPageHeight(this.workspace as any);
+    const w = this.preview.getPreviewPageWidth(this.workspace, index);
+    const h = this.preview.getPageHeight(this.workspace);
     return `${w}/${h}`;
   }
 
   getPreviewPageWidth(index: number): number {
     if (!this.workspace) return 0;
-    return this.preview.getPreviewPageWidth(this.workspace as any, index);
+    return this.preview.getPreviewPageWidth(this.workspace, index);
   }
 
   trackPreview(index: number, item: string) {
@@ -343,15 +435,64 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     this.lightboxUrl = "";
   }
 
-  /** 素材删除：用服务端返回的最新 workspace 更新状态，避免幽灵文件 */
-  onMaterialDeleted(ws: WorkspaceState) {
+  /** 素材删除/上传/选择后统一收口 workspace 更新，并清除旧 PDF 标记。 */
+  onMaterialChanged(ws: WorkspaceState) {
+    if (!ws) return;
     this.workspaceState.setWorkspace(ws);
+    this.workspaceState.clearPdfPath();
   }
 
-  /** 素材上传：清除旧 PDF 标记（预览刷新由 workspace$ 订阅自动触发） */
-  onMaterialUploaded() {
-    const ws = this.workspace as any;
-    if (ws) ws.pdf_path = null;
+  private updateWorkspaceParams(
+    updater: (ws: WorkspaceState) => WorkspaceState,
+  ): void {
+    this.workspaceState.batchUpdate((ws) => {
+      const next = updater(ws);
+      const pageCount = next.page_count ?? 0;
+      const paperThickness = next.paper_thickness ?? 0;
+      const spineWidth = calcSpineWidth(pageCount, paperThickness);
+      const pdfPath = next.pdf_path == null ? next.pdf_path : null;
+
+      if (
+        next.spine_width_mm === spineWidth &&
+        next.pdf_path === pdfPath
+      ) {
+        return next;
+      }
+
+      return {
+        ...next,
+        spine_width_mm: spineWidth,
+        pdf_path: pdfPath,
+      };
+    });
+    this.compositeCache.clear();
+    this.refreshComposite();
+    this.saveParams();
+  }
+
+  onPageCountChange(value: number) {
+    this.updateWorkspaceParams((ws) => ({
+      ...ws,
+      page_count: value,
+    }));
+  }
+
+  onPaperThicknessChange(value: number) {
+    this.updateWorkspaceParams((ws) => ({
+      ...ws,
+      paper_thickness: value,
+    }));
+  }
+
+  onSpineWidthChange(value: number) {
+    this.workspaceState.batchUpdate((ws) => ({
+      ...ws,
+      spine_width_mm: value,
+      pdf_path: ws.pdf_path == null ? ws.pdf_path : null,
+    }));
+    this.compositeCache.clear();
+    this.refreshComposite();
+    this.saveParams();
   }
 
   @HostListener("document:keydown.escape")
@@ -376,7 +517,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     const ws = this.workspace;
     if (!ws) return;
 
-    if ((ws as any).pdf_path) {
+    if (ws.pdf_path) {
       this.openPdfViewer();
       return;
     }
@@ -486,11 +627,11 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       trimSize: ws.trim_size,
       pageCount: ws.page_count,
       paperThickness: ws.paper_thickness,
-      target: "all",
+      target: "all" as const,
     };
 
     try {
-      await this._runAllWithSse(request as any);
+      await this._runAllWithSse(request);
       this.handleAiSuccess();
     } catch (error: unknown) {
       this.handleAiError(this.extractErrorMessage(error));
@@ -540,7 +681,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   /**
    * 执行 AI 生成任务（SSE 流式接收进度）
    */
-  private _runAllWithSse(request: any): Promise<void> {
+  private _runAllWithSse(request: AiGenerateAllRequest): Promise<void> {
     return new Promise((resolve, reject) => {
       this.print.aiGenerateStart(this.bookId, "all", request).subscribe({
         next: (res: any) => {
@@ -626,10 +767,6 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
 
       if (data.ws) {
         this.workspaceState.setWorkspace(data.ws);
-        this.compositeCache.clear();
-        this.refreshComposite();
-        // 强制触发变更检测，确保历史预览图可以正常切换
-        this.cdr.detectChanges();
       }
 
       if (data.total_tokens !== undefined) {
@@ -755,14 +892,8 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       horizontal?: number[];
     };
     source_cover_filename?: string | null;
-  }): {
-    imageUrl: string;
-    spreadFilename: string;
-    spreadWidth: number;
-    spreadHeight: number;
-    cropLines: { vertical_lines: number[]; horizontal_lines: number[] };
-    sourceCoverUrl: string;
-  } {
+    updated_at?: string;
+  }): SpreadPreviewItem {
     const verticalLines = payload.crop_lines?.vertical_lines?.length
       ? payload.crop_lines.vertical_lines
       : (payload.crop_lines?.vertical || []);
@@ -782,13 +913,106 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       sourceCoverUrl: payload.source_cover_filename
         ? this.material.getAssetUrl(this.bookId, 'cover', payload.source_cover_filename)
         : '',
+      updatedAt: payload.updated_at
+        ? new Intl.DateTimeFormat('zh-CN', {
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+          }).format(new Date(payload.updated_at))
+        : '',
     };
+  }
+
+  private syncSpreadHistoryFromWorkspace(ws: WorkspaceState | null): void {
+    const history = [ ...((ws?.ai_crop_history ?? []) as AiCropHistoryItem[]) ];
+    const draft = ws?.ai_crop_draft;
+
+    if (draft?.spread_filename && !history.some((item) => item?.spread_filename === draft.spread_filename)) {
+      history.unshift(draft);
+    }
+
+    this.spreadHistory = history
+      .filter((item): item is AiCropHistoryItem => !!item?.spread_filename)
+      .map((item) => this.buildSpreadPreview(item));
+  }
+
+  private syncSpreadPreviewWithHistory(): void {
+    if (!this.spreadPreview?.spreadFilename) {
+      return;
+    }
+
+    const refreshed = this.spreadHistory.find(
+      item => item.spreadFilename === this.spreadPreview?.spreadFilename
+    );
+
+    if (refreshed) {
+      this.spreadPreview = { ...refreshed };
+    }
+  }
+
+  private openSpreadPreviewByFilename(spreadFilename: string): boolean {
+    const target = this.spreadHistory.find((item) => item.spreadFilename === spreadFilename);
+    if (!target) {
+      return false;
+    }
+    this.spreadPreview = { ...target };
+    this.aiCropVisible = true;
+    return true;
+  }
+
+  private tryOpenDraftPreview(ws: WorkspaceState): boolean {
+    const draft = ws.ai_crop_draft;
+    if (!draft?.spread_filename) {
+      return false;
+    }
+
+    const opened = this.openSpreadPreviewByFilename(draft.spread_filename);
+    if (!opened) {
+      this.spreadPreview = this.buildSpreadPreview(draft);
+      this.aiCropVisible = true;
+    }
+    this.addLog('📝 已打开缓存的展开图草稿', 100, true);
+    return true;
   }
 
   /**
    * 启动 Gemini 展开图生成（新流程）
    * 替代旧的 onAiGenerate() SSE 流程
    */
+  openAiCropDialog(): void {
+    const ws = this.workspace;
+    if (!ws) {
+      return;
+    }
+
+    this.syncSpreadHistoryFromWorkspace(ws);
+
+    if (this.tryOpenDraftPreview(ws)) {
+      return;
+    }
+
+    if (this.spreadPreview?.spreadFilename) {
+      const refreshed = this.spreadHistory.find(
+        item => item.spreadFilename === this.spreadPreview?.spreadFilename
+      );
+      if (refreshed) {
+        this.spreadPreview = { ...refreshed };
+        this.aiCropVisible = true;
+        return;
+      }
+    }
+
+    const latestHistory = this.spreadHistory[0];
+    this.spreadPreview = latestHistory ? { ...latestHistory } : null;
+    this.aiCropVisible = true;
+  }
+
+  onDialogGenerate(): void {
+    this.onAiGenerateSpread();
+  }
+
   async onAiGenerateSpread(): Promise<void> {
     if (!this.canAiGenerate || this.aiGenerating) {
       return;
@@ -800,19 +1024,6 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       return;
     }
 
-    const draft = ws.ai_crop_draft;
-    if (draft?.spread_filename) {
-      this.spreadPreview = this.buildSpreadPreview({
-        spread_filename: draft.spread_filename,
-        spread_size: draft.spread_size,
-        crop_lines: draft.crop_lines,
-        source_cover_filename: draft.source_cover_filename,
-      });
-      this.aiCropVisible = true;
-      this.addLog('📝 已打开缓存的展开图草稿', 100, true);
-      return;
-    }
-
     this.aiGenerating = true;
     this.aiLastResult = null;
     this.aiErrorMsg = '';
@@ -820,7 +1031,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     this.aiProgressText = '生成展开图中...';
     this.aiPhaseText = '准备中';
     this.aiLogMessages = [];
-    this.addLog('开始生成 Gemini 展开图...', 0, true);
+    this.addLog('开始生成新的 Gemini 展开图...', 0, true);
 
     const request = {
       trimSize: ws.trim_size,
@@ -837,11 +1048,25 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
         this.aiPhaseText = '✅ 展开图生成完成';
         this.addLog('✅ 展开图生成成功，打开裁切窗口', 100, true);
 
-        this.spreadPreview = this.buildSpreadPreview(result);
-        this.aiCropVisible = true;
-
         if (result.workspace) {
           this.workspaceState.setWorkspace(result.workspace);
+        }
+
+        const nextSpreadFilename = result.spread_filename || result.workspace?.ai_crop_draft?.spread_filename;
+        if (nextSpreadFilename) {
+          const opened = this.openSpreadPreviewByFilename(nextSpreadFilename);
+          if (!opened) {
+            const historyItem = (result.workspace?.ai_crop_history || []).find(
+              (item: AiCropHistoryItem) => item.spread_filename === nextSpreadFilename,
+            );
+            this.spreadPreview = this.buildSpreadPreview(
+              historyItem || result.workspace?.ai_crop_draft || result,
+            );
+            this.aiCropVisible = true;
+          }
+        } else {
+          this.spreadPreview = this.buildSpreadPreview(result);
+          this.aiCropVisible = true;
         }
       },
       error: (err) => {
@@ -856,7 +1081,16 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     });
   }
 
-  /** 保存裁切结果 */
+  /**
+   * 保存裁切结果
+   *
+   * 生命周期：
+   * 1. 保存裁切线到后端，生成 front_output/spine/back 素材
+   * 2. 后端更新 ai_crop_history，清空 ai_crop_draft
+   * 3. 前端从返回的 workspace 重建 spreadHistory
+   * 4. 从新 history 中找到刚保存的项，更新 spreadPreview
+   * 5. 关闭弹窗
+   */
   onCropSave(event: any): void {
     const ws = this.workspace;
     if (!ws || !this.spreadPreview) {
@@ -864,62 +1098,76 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       return;
     }
 
+    this.cropSaving = true;
+    const savedSpreadFilename = this.spreadPreview.spreadFilename;
     const request = {
-      spread_filename: this.spreadPreview.spreadFilename,
+      spread_filename: savedSpreadFilename,
       vertical_lines: event.vertical_lines,
       horizontal_lines: event.horizontal_lines,
     };
 
     this.print.saveCroppedMaterials(this.bookId, request).subscribe({
       next: (result) => {
-        // Java 代理返回的是 { workspace, ... }
+        this.cropSaving = false;
         const nextWorkspace = result?.workspace ?? result;
-
         this.workspaceState.setWorkspace(nextWorkspace);
 
+        // 从返回的 workspace 重建 history，找到刚保存的项
+        const nextHistory = [...((nextWorkspace?.ai_crop_history ?? []) as AiCropHistoryItem[])];
+        const savedItem = nextHistory.find(item => item?.spread_filename === savedSpreadFilename);
+
+        if (savedItem) {
+          this.spreadPreview = this.buildSpreadPreview(savedItem);
+        }
+
         this.aiCropVisible = false;
-        this.spreadPreview = null;
-
-        event.callback();
-
         this.aiLastResult = 'success';
         this.addLog('✅ 裁切保存成功，素材已回填', 100, true);
       },
       error: (err) => {
+        this.cropSaving = false;
         alert('保存失败：' + (err.error?.error || '未知错误'));
-        event.callback();
       },
     });
   }
 
-  /** 关闭裁切弹窗并丢弃草稿 */
+  /** 关闭裁切弹窗，保留当前展开图状态 */
   closeCrop(): void {
-    this.print.discardAiCropDraft(this.bookId).subscribe({
-      next: (workspace) => {
-        const nextWorkspace = { ...(workspace || {}), ai_crop_draft: null };
-        this.workspaceState.setWorkspace(nextWorkspace);
-        this.aiCropVisible = false;
-        this.spreadPreview = null;
-      },
-      error: (err) => {
-        console.error('丢弃 AI 裁切草稿失败', err);
+    this.aiCropVisible = false;
+  }
 
-        const current = this.workspace;
-        if (current) {
-          this.workspaceState.setWorkspace({ ...current, ai_crop_draft: null });
+  onSpreadHistorySelect(spreadFilename: string): void {
+    this.openSpreadPreviewByFilename(spreadFilename);
+  }
+
+  onSpreadHistoryDelete(spreadFilename: string): void {
+    const deletingCurrentPreview = this.spreadPreview?.spreadFilename === spreadFilename;
+
+    this.print.deleteAiCropHistory(this.bookId, spreadFilename).subscribe({
+      next: (workspace) => {
+        this.workspaceState.setWorkspace(workspace);
+
+        if (!deletingCurrentPreview) {
+          this.addLog('🗑️ 已删除历史展开图', 100, true);
+          return;
         }
 
-        this.aiCropVisible = false;
-        this.spreadPreview = null;
+        const nextHistory = [...((workspace?.ai_crop_history ?? []) as AiCropHistoryItem[])];
+        const nextItem = nextHistory[0] ?? null;
+
+        if (nextItem) {
+          this.spreadPreview = this.buildSpreadPreview(nextItem);
+        } else {
+          this.aiCropVisible = false;
+          this.spreadPreview = null;
+        }
+
+        this.addLog('🗑️ 已删除历史展开图', 100, true);
+      },
+      error: (err) => {
+        alert('删除历史展开图失败：' + (err.error?.error || '未知错误'));
       },
     });
-  }
-
-  /** 关闭裁切弹窗但保留草稿，下次直接继续编辑 */
-  cacheCloseCrop(): void {
-    this.aiCropVisible = false;
-    this.spreadPreview = null;
-    this.addLog('📝 已缓存当前展开图草稿，下次可直接继续编辑', 100, true);
   }
 
   goBookDetail() {

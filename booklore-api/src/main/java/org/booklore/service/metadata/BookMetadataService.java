@@ -66,19 +66,25 @@ public class BookMetadataService {
     private final MetadataClearFlagsMapper metadataClearFlagsMapper;
     private final PlatformTransactionManager transactionManager;
     private final AppSettingService appSettingService;
+    private final MetadataRefreshService metadataRefreshService;
 
 
     public Flux<BookMetadata> getProspectiveMetadataListForBookId(long bookId, FetchMetadataRequest request) {
         BookEntity bookEntity = bookRepository.findById(bookId).orElseThrow(() -> ApiError.BOOK_NOT_FOUND.createException(bookId));
         Book book = bookMapper.toBook(bookEntity);
+        List<MetadataProvider> orderedProviders = metadataRefreshService.prioritizeFallbackProviders(request.getProviders());
 
-        return Flux.fromIterable(request.getProviders())
+        return Flux.fromIterable(orderedProviders)
                 .flatMap(provider ->
                     Mono.fromCallable(() -> fetchMetadataListFromAProvider(provider, book, request))
                             .subscribeOn(Schedulers.boundedElastic())
                             .flatMapMany(Flux::fromIterable)
                             .onErrorResume(e -> {
-                                log.error("Error fetching metadata from provider: {}", provider, e);
+                                if (e instanceof InterruptedException || Thread.currentThread().isInterrupted()) {
+                                    log.info("Metadata lookup interrupted for provider: {}", provider);
+                                } else {
+                                    log.warn("Metadata lookup failed for provider {}: {}", provider, e.getMessage());
+                                }
                                 return Flux.empty();
                             })
                 );
@@ -125,7 +131,7 @@ public class BookMetadataService {
                             .distinct()
                             .toList();
                     if (!chain.isEmpty()) {
-                        return chain;
+                        return metadataRefreshService.prioritizeFallbackProviders(chain);
                     }
                 }
             }

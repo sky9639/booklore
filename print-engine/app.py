@@ -1,7 +1,7 @@
 import os
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 from cover_extractor import *
@@ -14,7 +14,14 @@ from layout_engine import *
 from material_manager import *
 from pdf_analyzer import get_pdf_page_count
 from pydantic import BaseModel
-from utils import calculate_spine_width, upgrade_workspace_schema
+from utils import (
+    calculate_spine_width,
+    upgrade_workspace_schema,
+    ensure_ai_crop_history,
+    upsert_ai_crop_history_item,
+    find_ai_crop_history_item,
+    remove_ai_crop_history_item,
+)
 from workspace_manager import *
 
 load_dotenv("booklore.env")
@@ -43,8 +50,20 @@ app.add_middleware(
 )
 
 
-def touch_workspace(ws: dict):
-    ws["updated_at"] = datetime.utcnow().isoformat()
+
+def persist_workspace(book_path: str, ws: dict, schema_hint: dict | BaseModel | None = None):
+    """
+    统一的 workspace 持久化入口。
+
+    约定：
+    - 调用方先完成 ws 的字段修改
+    - 这里统一做 schema upgrade + UTC 时间戳落盘
+    - print-engine 是 workspace.json 的唯一写入者
+    """
+    hint = schema_hint.model_dump() if isinstance(schema_hint, BaseModel) else (schema_hint or {"book_path": book_path})
+    normalized = upgrade_workspace_schema(ws, hint)
+    save_workspace(book_path, normalized)
+    return normalized
 
 
 def cleanup_spread_preview(print_root: str, spread_filename: str | None):
@@ -57,6 +76,22 @@ def cleanup_spread_preview(print_root: str, spread_filename: str | None):
             os.remove(preview_path)
     except Exception as e:
         print(f"cleanup spread preview failed: {e}")
+
+
+def resolve_effective_front_asset(print_root: str, ws: dict) -> tuple[str | None, str | None]:
+    front_output = (ws.get("front_output") or {}).get("selected")
+    if front_output:
+        front_path = os.path.join(print_root, "front_output", front_output)
+        if os.path.isfile(front_path):
+            return "front_output", front_output
+
+    cover_selected = (ws.get("cover") or {}).get("selected")
+    if cover_selected:
+        cover_path = os.path.join(print_root, "cover", cover_selected)
+        if os.path.isfile(cover_path):
+            return "cover", cover_selected
+
+    return None, None
 
 
 # ==============================
@@ -132,6 +167,11 @@ class AiCropDiscardRequest(BaseModel):
     book_path: str
 
 
+class AiCropHistoryDeleteRequest(BaseModel):
+    book_path: str
+    spread_filename: str
+
+
 # ==============================
 # 初始化 Workspace
 # ==============================
@@ -144,8 +184,7 @@ def init_workspace(request: InitRequest):
 
     if ws:
         ws = upgrade_workspace_schema(ws, request)
-        touch_workspace(ws)
-        save_workspace(request.book_path, ws)
+        ws = persist_workspace(request.book_path, ws, request)
         return ws
 
     if request.book_path.lower().endswith(".pdf"):
@@ -164,10 +203,13 @@ def init_workspace(request: InitRequest):
         "paper_thickness": 0.06,
         "spine_width_mm": calculate_spine_width(page_count, 0.06),
         "cover": {"selected": None, "history": []},
+        "front_output": {"selected": None, "history": []},
         "spine": {"selected": None, "history": []},
         "back": {"selected": None, "history": []},
         "preview_path": None,
         "pdf_path": None,
+        "ai_crop_draft": None,
+        "ai_crop_history": [],
         "updated_at": datetime.utcnow().isoformat(),
     }
 
@@ -190,7 +232,7 @@ def init_workspace(request: InitRequest):
         except Exception as e:
             print("PDF cover extract failed:", e)
 
-    save_workspace(request.book_path, ws)
+    persist_workspace(request.book_path, ws, request)
     return ws
 
 
@@ -209,8 +251,7 @@ def extract_cover(request: dict):
         raise RuntimeError("workspace not initialized")
     filename = extract_cover_page(book_path, page, print_root)
     update_history(ws, "cover", filename)
-    touch_workspace(ws)
-    save_workspace(book_path, ws)
+    ws = persist_workspace(book_path, ws, request)
     return ws
 
 
@@ -229,9 +270,54 @@ async def upload_material(
     content = await file.read()
     filename = add_material(print_root, category, content, ext)
     update_history(ws, category, filename)
-    touch_workspace(ws)
-    save_workspace(book_path, ws)
+    ws = persist_workspace(book_path, ws, {"book_path": book_path, "category": category})
     return ws
+
+
+@app.post("/workspace/material/select")
+def select_material(request: dict):
+    book_path = request["book_path"]
+    category = request["category"]
+    filename = request["filename"]
+
+    ws = load_workspace(book_path)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    ws = upgrade_workspace_schema(ws, request)
+
+    if category not in ws:
+        raise HTTPException(status_code=400, detail="Invalid category")
+
+    ws[category]["selected"] = filename
+    if category == "cover" and "front_output" in ws:
+        ws["front_output"]["selected"] = None
+
+    return persist_workspace(book_path, ws, request)
+
+
+@app.post("/workspace/material/delete")
+def delete_material(request: dict):
+    book_path = request["book_path"]
+    category = request["category"]
+    filename = request["filename"]
+
+    ws = load_workspace(book_path)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    ws = upgrade_workspace_schema(ws, request)
+
+    if category in ws and "history" in ws[category]:
+        ws[category]["history"] = [
+            item for item in ws[category].get("history", []) if item != filename
+        ]
+
+    if category in ws and ws[category].get("selected") == filename:
+        history = ws[category].get("history", [])
+        ws[category]["selected"] = history[0] if history else None
+
+    return persist_workspace(book_path, ws, request)
 
 
 # ==============================
@@ -254,8 +340,7 @@ def save_workspace_params(request: SaveParamsRequest):
     # 参数变化，旧 PDF 作废
     ws["pdf_path"] = None
 
-    touch_workspace(ws)
-    save_workspace(request.book_path, ws)
+    ws = persist_workspace(request.book_path, ws, request)
     return ws
 
 
@@ -461,9 +546,12 @@ def preview(request: PreviewRequest):
     trim_map = {"A5": (148, 210), "B5": (176, 250), "A4": (210, 297)}
     trim_width_mm, trim_height_mm = trim_map[request.trim_size]
 
+    front_category, effective_front_filename = resolve_effective_front_asset(print_root, ws)
+
     preview_path = generate_preview_layout(
         print_root,
-        ws["cover"]["selected"],
+        front_category,
+        effective_front_filename,
         ws["spine"]["selected"],
         ws["back"]["selected"],
         spine_width,
@@ -476,8 +564,7 @@ def preview(request: PreviewRequest):
     ws["spine_width_mm"] = spine_width
     ws["preview_path"] = preview_path
 
-    touch_workspace(ws)
-    save_workspace(request.book_path, ws)
+    ws = persist_workspace(request.book_path, ws, request)
     return ws
 
 
@@ -500,9 +587,12 @@ def generate(request: PreviewRequest):
     trim_size = request.trim_size or ws.get("trim_size", "A5")
     trim_width_mm, trim_height_mm = trim_map[trim_size]
 
+    front_category, effective_front_filename = resolve_effective_front_asset(print_root, ws)
+
     pdf_filename = generate_layout(
         print_root,
-        ws["cover"]["selected"],
+        front_category,
+        effective_front_filename,
         ws["spine"]["selected"],
         ws["back"]["selected"],
         spine_width,
@@ -518,8 +608,7 @@ def generate(request: PreviewRequest):
     ws["paper_thickness"] = paper_thickness
     ws["spine_width_mm"] = spine_width
 
-    touch_workspace(ws)
-    save_workspace(request.book_path, ws)
+    ws = persist_workspace(request.book_path, ws, request)
     return ws
 
 
@@ -643,12 +732,11 @@ def _run_ai_task_all(
             if not filenames:
                 raise RuntimeError(f"{target} AI generation produced no results")
 
-            # 更新 workspace 历史记录
+            # 更新 workspace 历史记录（每个 target 完成后立即保存）
             for filename in reversed(filenames):
                 update_history(ws, target, filename)
             ws[target]["selected"] = filenames[0]
-            touch_workspace(ws)
-            save_workspace(request.book_path, ws)
+            ws = persist_workspace(request.book_path, ws, request)
 
             # 记录完成状态
             with _ai_tasks_lock:
@@ -657,7 +745,19 @@ def _run_ai_task_all(
                     _ai_tasks[task_id]["pct"] = phase_end
                     _ai_tasks[task_id]["total_tokens"] = total_tokens
 
+        # ============================================================
         # 重新加载 workspace，合并生成期间用户可能的其他操作
+        # ============================================================
+        # 场景：
+        # - 用户在 AI 生成过程中手动上传了新封面
+        # - 或者修改了 trim_size / page_count / paper_thickness
+        # - 如果直接用循环中的 ws 覆盖，会丢失用户的修改
+        #
+        # 策略：
+        # - 重新 load 最新 workspace
+        # - 只更新 AI 相关字段（spine/back/front_output）
+        # - 保留用户可能修改的字段（cover/trim_size/page_count/paper_thickness/spine_width_mm/pdf_path/preview_path）
+        # ============================================================
         fresh_ws = load_workspace(request.book_path) or ws
 
         # 将本次生成的文件合并到最新 workspace
@@ -669,6 +769,8 @@ def _run_ai_task_all(
                     hist.insert(0, done_file)
                     fresh_ws[tgt]["history"] = hist[:5]  # 保留最近5个
                 fresh_ws[tgt]["selected"] = done_file
+
+        fresh_ws = persist_workspace(request.book_path, fresh_ws, request)
 
         # 标记任务完成
         with _ai_tasks_lock:
@@ -879,8 +981,7 @@ def ai_generate(request: AiGenerateRequest):
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    touch_workspace(ws)
-    save_workspace(request.book_path, ws)
+    ws = persist_workspace(request.book_path, ws, request)
     return ws
 
 
@@ -917,6 +1018,7 @@ def ai_generate_spread(request: AiGenerateRequest):
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
+    ws = upgrade_workspace_schema(ws, request)
     cover_selected = ws.get("cover", {}).get("selected")
     if not cover_selected:
         raise HTTPException(status_code=400, detail="No cover image selected")
@@ -935,7 +1037,7 @@ def ai_generate_spread(request: AiGenerateRequest):
             template_id=request.template_id,
         )
 
-        ws["ai_crop_draft"] = {
+        draft_item = {
             "spread_filename": result.get("spread_filename"),
             "spread_size": result.get("spread_size"),
             "crop_lines": result.get("crop_lines"),
@@ -944,8 +1046,13 @@ def ai_generate_spread(request: AiGenerateRequest):
             "spine_width_mm": spine_width_mm,
             "updated_at": datetime.utcnow().isoformat(),
         }
-        touch_workspace(ws)
-        save_workspace(request.book_path, ws)
+
+        # ai_crop_draft 表示当前正在编辑的展开图，会话恢复优先使用它。
+        # 同时把新生成的 spread 写入 ai_crop_history，这样连续点击“AI生图”时，
+        # 左侧历史列表会持续累积，而不是被新的 draft 覆盖掉旧项。
+        ws["ai_crop_draft"] = draft_item
+        upsert_ai_crop_history_item(ws, draft_item)
+        ws = persist_workspace(request.book_path, ws, request)
 
         result["workspace"] = ws
         return result
@@ -955,10 +1062,21 @@ def ai_generate_spread(request: AiGenerateRequest):
 
 @app.post("/workspace/ai-generate/crop")
 def ai_generate_crop(request: AiCropSaveRequest):
+    """
+    保存裁切结果，生成 front_output / spine / back 素材。
+
+    生命周期：
+    1. 从 spread 图片按裁切线切出三块素材，保存到对应目录
+    2. 更新 workspace 的 front_output / spine / back 的 selected + history
+    3. 将当前 spread 信息写入 ai_crop_history（如果尚未存在）
+    4. 清空 ai_crop_draft（表示草稿已确认保存）
+    5. 返回更新后的 workspace 给前端
+    """
     ws = load_workspace(request.book_path)
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
+    ws = upgrade_workspace_schema(ws, request)
     print_root = get_print_root(request.book_path)
 
     try:
@@ -973,13 +1091,36 @@ def ai_generate_crop(request: AiCropSaveRequest):
 
         update_history(ws, "back", result["back_filename"])
         update_history(ws, "spine", result["spine_filename"])
+        update_history(ws, "front_output", result["front_filename"])
+        ws["front_output"]["selected"] = result["front_filename"]
+
+        existing_history_item = find_ai_crop_history_item(ws, request.spread_filename) or {}
+        draft_item = ws.get("ai_crop_draft") or {}
+
+        spread_size = existing_history_item.get("spread_size") or draft_item.get("spread_size")
+        if not spread_size or not spread_size.get("width") or not spread_size.get("height"):
+            spread_path = os.path.join(print_root, "preview", request.spread_filename)
+            if os.path.isfile(spread_path):
+                from PIL import Image
+                with Image.open(spread_path) as img:
+                    spread_size = {"width": img.width, "height": img.height}
+
+        history_item = {
+            "spread_filename": request.spread_filename,
+            "spread_size": spread_size,
+            "crop_lines": result["crop_lines"],
+            "source_cover_filename": existing_history_item.get("source_cover_filename") or draft_item.get("source_cover_filename"),
+            "trim_size": existing_history_item.get("trim_size") or ws.get("trim_size", "A5"),
+            "spine_width_mm": existing_history_item.get("spine_width_mm") or ws.get("spine_width_mm", 4.74),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        upsert_ai_crop_history_item(ws, history_item)
         ws["ai_crop_draft"] = None
-        touch_workspace(ws)
-        save_workspace(request.book_path, ws)
-        cleanup_spread_preview(print_root, request.spread_filename)
+        ws = persist_workspace(request.book_path, ws, request)
 
         return {
             "workspace": ws,
+            "front_filename": result["front_filename"],
             "back_filename": result["back_filename"],
             "spine_filename": result["spine_filename"],
             "crop_lines": result["crop_lines"],
@@ -994,12 +1135,28 @@ def ai_generate_discard(request: AiCropDiscardRequest):
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
-    draft = ws.get("ai_crop_draft") or {}
-    spread_filename = draft.get("spread_filename")
-    print_root = get_print_root(request.book_path)
-
+    ws = upgrade_workspace_schema(ws, request)
     ws["ai_crop_draft"] = None
-    touch_workspace(ws)
-    save_workspace(request.book_path, ws)
-    cleanup_spread_preview(print_root, spread_filename)
+    ws = persist_workspace(request.book_path, ws, request)
+    return ws
+
+
+@app.post("/workspace/ai-generate/history/delete")
+def ai_generate_history_delete(request: AiCropHistoryDeleteRequest):
+    ws = load_workspace(request.book_path)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    ws = upgrade_workspace_schema(ws, request)
+    print_root = get_print_root(request.book_path)
+    removed = remove_ai_crop_history_item(ws, request.spread_filename)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Spread history not found")
+
+    draft = ws.get("ai_crop_draft") or {}
+    if draft.get("spread_filename") == request.spread_filename:
+        ws["ai_crop_draft"] = None
+
+    ws = persist_workspace(request.book_path, ws, request)
+    cleanup_spread_preview(print_root, request.spread_filename)
     return ws

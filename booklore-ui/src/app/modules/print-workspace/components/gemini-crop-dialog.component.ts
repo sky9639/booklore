@@ -1,6 +1,7 @@
 import { Component, EventEmitter, Input, Output, OnInit, OnDestroy, HostListener, OnChanges, SimpleChanges, ViewChild, ElementRef, AfterViewInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import type { SpreadPreviewItem } from '../models/workspace.model';
 
 interface CropLine {
   id: string;
@@ -8,6 +9,11 @@ interface CropLine {
   position: number;
   label: string;
   shortLabel: string;
+}
+
+interface CropSaveEvent {
+  vertical_lines: number[];
+  horizontal_lines: number[];
 }
 
 @Component({
@@ -19,20 +25,30 @@ interface CropLine {
 })
 export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, AfterViewInit {
   @Input() visible = false;
+  @Input() generating = false;
+  @Input() generateButtonText = 'AI生图';
+  @Input() generateErrorMessage = '';
   @Input() spreadImageUrl = '';
   @Input() spreadWidth = 0;
   @Input() spreadHeight = 0;
-  @Input() sourceCoverUrl = '';
-  @Input() initialLines: any = null;
-  @Output() save = new EventEmitter<any>();
-  @Output() discard = new EventEmitter<void>();
-  @Output() cacheClose = new EventEmitter<void>();
+  @Input() initialLines: { vertical_lines?: number[]; horizontal_lines?: number[]; vertical?: number[]; horizontal?: number[] } | null = null;
+  @Input() historyItems: SpreadPreviewItem[] = [];
+  @Input() activeSpreadFilename = '';
+  @Input() saving = false;
+  @Output() generate = new EventEmitter<void>();
+  @Output() openConfig = new EventEmitter<void>();
+  @Output() save = new EventEmitter<CropSaveEvent>();
+  @Output() close = new EventEmitter<void>();
+  @Output() historySelect = new EventEmitter<string>();
+  @Output() historyDelete = new EventEmitter<string>();
 
   @ViewChild('canvasShell', { static: false }) canvasShellRef?: ElementRef<HTMLDivElement>;
 
   displayWidth = 0;
   displayHeight = 0;
   scale = 1;
+  private cachedSpreadKey = '';
+  private cachedScale = 1;
 
   // 缩放和拖拽相关
   zoom = 1.0;  // 当前缩放级别（0.25 - 4.0）
@@ -51,7 +67,6 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
   lines: CropLine[] = [];
   selectedLineId: string | null = null;
   draggingLineId: string | null = null;
-  private frontRightBoundary = 0;
 
   private dragStartX = 0;
   private dragStartY = 0;
@@ -59,22 +74,17 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
 
   backPreviewUrl = '';
   spinePreviewUrl = '';
-  previewLoadFailed = {
-    back: false,
-    spine: false,
-  };
+  frontPreviewUrl = '';
   private sourceImageUrl = '';
   private sourceImage: HTMLImageElement | null = null;
   private sourceImagePromise: Promise<HTMLImageElement> | null = null;
   private previewRenderToken = 0;
   private refreshScheduled = false;
-
-  showCoverReference = false;
-  saving = false;
+  private previewUpdateScheduled = false;
+  private lastPreviewKey = '';
 
   private readonly minDisplayGap = 8;
   private readonly blankAreaDragThreshold = 5;
-  coverReferenceStyle: Record<string, string> | null = null;
 
   constructor() {}
 
@@ -102,13 +112,19 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
       this.sourceImagePromise = null;
       this.sourceImageUrl = '';
       this.previewRenderToken++;
+      this.lastPreviewKey = '';
+      this.zoom = 1.0;
+      this.panX = 0;
+      this.panY = 0;
     }
 
-    if (changes['visible'] || changes['spreadImageUrl'] || changes['spreadWidth'] || changes['spreadHeight'] || changes['initialLines'] || changes['sourceCoverUrl']) {
+    if (changes['spreadWidth'] || changes['spreadHeight']) {
+      this.invalidateScaleCache();
+    }
+
+    if (changes['visible'] || changes['spreadImageUrl'] || changes['spreadWidth'] || changes['spreadHeight'] || changes['initialLines']) {
       if (this.visible) {
         this.scheduleVisibleRefresh();
-      } else {
-        this.coverReferenceStyle = null;
       }
     }
   }
@@ -116,8 +132,14 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
   @HostListener('window:resize')
   onWindowResize(): void {
     if (this.visible) {
+      this.invalidateScaleCache();
       this.scheduleVisibleRefresh();
     }
+  }
+
+  private invalidateScaleCache(): void {
+    this.cachedSpreadKey = '';
+    this.cachedScale = 1;
   }
 
   private scheduleVisibleRefresh(): void {
@@ -133,16 +155,50 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
       }
 
       this.syncDisplayMetrics();
+
+      if ((!this.spreadWidth || !this.spreadHeight) && this.spreadImageUrl) {
+        this.loadImageDimensionsAndRefresh();
+        return;
+      }
+
       this.initializeLines();
       this.updatePreviews();
     });
   }
 
-  private syncDisplayMetrics(): void {
-    if (!this.spreadWidth || !this.spreadHeight) {
+  private async loadImageDimensionsAndRefresh(): Promise<void> {
+    try {
+      const img = await this.getSourceImage();
+      const spreadWidth = this.spreadWidth || img.naturalWidth || img.width;
+      const spreadHeight = this.spreadHeight || img.naturalHeight || img.height;
+      if (!spreadWidth || !spreadHeight) {
+        return;
+      }
+      this.invalidateScaleCache();
+      this.syncDisplayMetrics(spreadWidth, spreadHeight);
+      this.initializeLines();
+      this.updatePreviews();
+    } catch {
+      // ignore dimension fallback failure and keep current empty state
+    }
+  }
+
+
+  private syncDisplayMetrics(spreadWidth = this.spreadWidth, spreadHeight = this.spreadHeight): void {
+    if (!spreadWidth || !spreadHeight) {
       this.displayWidth = 0;
       this.displayHeight = 0;
       this.scale = 1;
+      this.invalidateScaleCache();
+      return;
+    }
+
+    const currentSpreadKey = `${spreadWidth}x${spreadHeight}`;
+
+    if (this.cachedSpreadKey === currentSpreadKey && this.cachedScale > 0) {
+      this.scale = this.cachedScale;
+      this.displayWidth = Math.round(spreadWidth * this.scale);
+      this.displayHeight = Math.round(spreadHeight * this.scale);
       return;
     }
 
@@ -151,19 +207,26 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
 
     if (this.canvasShellRef?.nativeElement) {
       const rect = this.canvasShellRef.nativeElement.getBoundingClientRect();
-      availableWidth = Math.max(rect.width - 40, 400);
-      availableHeight = Math.max(rect.height - 40, 400);
+      if (rect.width > 0 && rect.height > 0) {
+        availableWidth = Math.max(rect.width - 40, 400);
+        availableHeight = Math.max(rect.height - 40, 400);
+      } else {
+        availableWidth = Math.max(window.innerWidth * 0.6, 800);
+        availableHeight = Math.max(window.innerHeight * 0.7, 600);
+      }
     } else {
       availableWidth = Math.max(window.innerWidth * 0.6, 800);
       availableHeight = Math.max(window.innerHeight * 0.7, 600);
     }
 
-    const scaleX = availableWidth / this.spreadWidth;
-    const scaleY = availableHeight / this.spreadHeight;
+    const scaleX = availableWidth / spreadWidth;
+    const scaleY = availableHeight / spreadHeight;
 
     this.scale = Math.min(scaleX, scaleY);
-    this.displayWidth = Math.round(this.spreadWidth * this.scale);
-    this.displayHeight = Math.round(this.spreadHeight * this.scale);
+    this.cachedSpreadKey = currentSpreadKey;
+    this.cachedScale = this.scale;
+    this.displayWidth = Math.round(spreadWidth * this.scale);
+    this.displayHeight = Math.round(spreadHeight * this.scale);
   }
 
   private initializeLines(): void {
@@ -184,18 +247,11 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
       Math.floor(this.spreadHeight * 0.9),
     ];
 
-    this.frontRightBoundary = Math.round(vLines[3] * this.scale);
-    this.coverReferenceStyle = {
-      left: `${Math.round(vLines[2] * this.scale)}px`,
-      top: `${Math.round(hLines[0] * this.scale)}px`,
-      width: `${Math.max(Math.round((vLines[3] - vLines[2]) * this.scale), 1)}px`,
-      height: `${Math.max(Math.round((hLines[1] - hLines[0]) * this.scale), 1)}px`,
-    };
-
     this.lines = [
       { id: 'v1', type: 'vertical', position: Math.round(vLines[0] * this.scale), label: '封底左边界', shortLabel: '封底左' },
       { id: 'v2', type: 'vertical', position: Math.round(vLines[1] * this.scale), label: '封底/书脊分界线', shortLabel: '共享线' },
       { id: 'v3', type: 'vertical', position: Math.round(vLines[2] * this.scale), label: '书脊右边界', shortLabel: '书脊右' },
+      { id: 'v4', type: 'vertical', position: Math.round(vLines[3] * this.scale), label: '前封右边界', shortLabel: '前封右' },
       { id: 'h1', type: 'horizontal', position: Math.round(hLines[0] * this.scale), label: '上边界', shortLabel: '上边界' },
       { id: 'h2', type: 'horizontal', position: Math.round(hLines[1] * this.scale), label: '下边界', shortLabel: '下边界' },
     ];
@@ -203,53 +259,68 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
     this.normalizeLinePositions();
   }
 
-  toggleCoverReference(): void {
-    this.showCoverReference = !this.showCoverReference;
-  }
-
-  getLineStyle(line: CropLine): any {
-    const isSelected = this.selectedLineId === line.id;
-    const isDragging = this.draggingLineId === line.id;
-    const isHorizontal = line.type === 'horizontal';
-    const activeColor = isHorizontal ? '#f59e0b' : '#4f8fff';
-    const idleColor = isHorizontal ? 'rgba(245, 158, 11, 0.7)' : 'rgba(79, 143, 255, 0.72)';
-
-    if (line.type === 'vertical') {
-      return {
-        left: `${line.position}px`,
-        top: 0,
-        height: '100%',
-        width: '4px',
-        cursor: 'ew-resize',
-        transform: 'translateX(-2px)',
-        backgroundColor: isSelected || isDragging ? activeColor : idleColor,
-        boxShadow: isSelected || isDragging ? '0 0 12px rgba(79, 143, 255, 0.95)' : '0 0 0 1px rgba(79, 143, 255, 0.18)',
-      };
-    }
-
-    return {
-      top: `${line.position}px`,
-      left: 0,
-      width: '100%',
-      height: '4px',
-      cursor: 'ns-resize',
-      transform: 'translateY(-2px)',
-      backgroundColor: isSelected || isDragging ? activeColor : idleColor,
-      boxShadow: isSelected || isDragging ? '0 0 12px rgba(245, 158, 11, 0.9)' : '0 0 0 1px rgba(245, 158, 11, 0.18)',
-    };
-  }
-
   get selectedLineLabel(): string {
     return this.lines.find((line) => line.id === this.selectedLineId)?.label || '未选中分界线';
   }
 
-  onPreviewImageError(type: 'back' | 'spine'): void {
-    this.previewLoadFailed[type] = true;
+  selectHistory(spreadFilename: string): void {
+    if (!spreadFilename || spreadFilename === this.activeSpreadFilename) {
+      return;
+    }
+    this.historySelect.emit(spreadFilename);
+  }
+
+  deleteHistory(spreadFilename: string, event: Event): void {
+    event.stopPropagation();
+    if (!spreadFilename) {
+      return;
+    }
+    const confirmed = confirm('确认删除这张历史展开图吗？删除后无法恢复。');
+    if (!confirmed) {
+      return;
+    }
+    this.historyDelete.emit(spreadFilename);
+  }
+
+  get previewStatusText(): string {
+    if (this.generating) {
+      return '正在生成新的 AI 展开图';
+    }
+    if (this.saving) {
+      return '正在保存裁切结果';
+    }
+    if (this.generateErrorMessage) {
+      return '生成失败，请调整配置后重试';
+    }
+    if (this.spreadImageUrl) {
+      return '拖动裁切线时，右侧预览会实时更新';
+    }
+    return '暂无展开图，请先点击 AI生图';
+  }
+
+  get hasPreviewImage(): boolean {
+    return !!this.spreadImageUrl;
+  }
+
+  onPreviewImageError(type: 'back' | 'spine' | 'front'): void {
     if (type === 'back') {
       this.backPreviewUrl = '';
-    } else {
+    } else if (type === 'spine') {
       this.spinePreviewUrl = '';
+    } else {
+      this.frontPreviewUrl = '';
     }
+  }
+
+  onGenerate(): void {
+    if (this.generating) {
+      return;
+    }
+    this.generate.emit();
+  }
+
+  onOpenConfig(): void {
+    this.openConfig.emit();
   }
 
   private async getSourceImage(): Promise<HTMLImageElement> {
@@ -311,7 +382,7 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
     const nextPosition = this.dragStartPosition + delta;
 
     this.setLinePosition(line, nextPosition);
-    this.updatePreviews();
+    this.schedulePreviewUpdate();
   };
 
   private onDocumentMouseUp = (): void => {
@@ -359,7 +430,15 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
 
   @HostListener('window:keydown', ['$event'])
   onKeyDown(event: KeyboardEvent): void {
-    if (!this.visible || !this.selectedLineId) return;
+    if (!this.visible) return;
+
+    // Esc 键取消选中
+    if (event.key === 'Escape') {
+      this.selectedLineId = null;
+      return;
+    }
+
+    if (!this.selectedLineId) return;
 
     const line = this.lines.find((l) => l.id === this.selectedLineId);
     if (!line) return;
@@ -387,12 +466,16 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
 
     event.preventDefault();
     this.setLinePosition(line, nextPosition);
-    this.updatePreviews();
+    this.schedulePreviewUpdate();
   }
 
   private setLinePosition(line: CropLine, nextPosition: number): void {
+    const previous = line.position;
     line.position = this.clampLinePosition(line, nextPosition);
     this.normalizeLinePositions();
+    if (Math.abs(line.position - previous) < 0.01) {
+      return;
+    }
   }
 
   private clampLinePosition(line: CropLine, nextPosition: number): number {
@@ -414,8 +497,18 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
     const h1 = this.lines.find((line) => line.id === 'h1');
     const h2 = this.lines.find((line) => line.id === 'h2');
 
-    for (const line of this.lines.filter((item) => item.type === 'vertical')) {
+    const verticalLines = this.lines.filter((item) => item.type === 'vertical').sort((a, b) => a.position - b.position);
+
+    for (let i = 0; i < verticalLines.length; i++) {
+      const line = verticalLines[i];
       line.position = Math.max(0, Math.min(this.displayWidth, line.position));
+
+      if (i > 0) {
+        const prevLine = verticalLines[i - 1];
+        if (line.position < prevLine.position + this.minDisplayGap) {
+          line.position = prevLine.position + this.minDisplayGap;
+        }
+      }
     }
 
     if (h1 && h2) {
@@ -425,17 +518,14 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
   }
 
   private getOrderedCropBounds(): { verticalLines: number[]; horizontalLines: number[] } {
-    const editableVerticalLines = this.lines
+    const verticalLines = this.lines
       .filter((line) => line.type === 'vertical')
-      .map((line) => line.position);
+      .map((line) => line.position)
+      .sort((a, b) => a - b);
 
     const horizontalLines = this.lines
       .filter((line) => line.type === 'horizontal')
       .map((line) => line.position)
-      .sort((a, b) => a - b);
-
-    const verticalLines = [...editableVerticalLines, this.frontRightBoundary]
-      .map((value) => Math.max(0, Math.min(this.displayWidth, value)))
       .sort((a, b) => a - b);
 
     return { verticalLines, horizontalLines };
@@ -450,13 +540,31 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
     };
   }
 
+  private schedulePreviewUpdate(): void {
+    if (this.previewUpdateScheduled) {
+      return;
+    }
+
+    this.previewUpdateScheduled = true;
+    requestAnimationFrame(() => {
+      this.previewUpdateScheduled = false;
+      if (!this.visible) {
+        return;
+      }
+      this.updatePreviews();
+    });
+  }
+
   private updatePreviews(): void {
     const { vertical_lines: vLines, horizontal_lines: hLines } = this.getSaveLines();
 
-    if (vLines.length !== 4 || hLines.length !== 2) return;
+    if (vLines.length !== 4 || hLines.length !== 2 || !this.spreadImageUrl) return;
 
-    this.previewLoadFailed.back = false;
-    this.previewLoadFailed.spine = false;
+    const previewKey = `${this.spreadImageUrl}|${vLines.join(',')}|${hLines.join(',')}`;
+    if (previewKey === this.lastPreviewKey) {
+      return;
+    }
+    this.lastPreviewKey = previewKey;
 
     const renderToken = ++this.previewRenderToken;
     this.getSourceImage()
@@ -467,13 +575,15 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
 
         this.backPreviewUrl = this.cropImageRegion(img, vLines[0], hLines[0], vLines[1], hLines[1]);
         this.spinePreviewUrl = this.cropImageRegion(img, vLines[1], hLines[0], vLines[2], hLines[1]);
+        this.frontPreviewUrl = this.cropImageRegion(img, vLines[2], hLines[0], vLines[3], hLines[1]);
       })
       .catch(() => {
         if (renderToken !== this.previewRenderToken) {
           return;
         }
-        this.previewLoadFailed.back = true;
-        this.previewLoadFailed.spine = true;
+        this.backPreviewUrl = '';
+        this.spinePreviewUrl = '';
+        this.frontPreviewUrl = '';
       });
   }
 
@@ -494,28 +604,12 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
 
   onSave(): void {
     const payload = this.getSaveLines();
-    this.saving = true;
-
-    this.save.emit({
-      ...payload,
-      callback: () => {
-        this.saving = false;
-        this.onClose();
-      },
-    });
+    this.save.emit(payload);
   }
 
   onClose(): void {
-    this.resetInteractionState(true);
-    this.discard.emit();
-  }
-
-  onCacheClose(): void {
-    const confirmed = confirm('缓存当前结果，下次可直接继续编辑。');
-    if (!confirmed) return;
-
     this.resetInteractionState(false);
-    this.cacheClose.emit();
+    this.close.emit();
   }
 
   private resetInteractionState(clearPreviews: boolean): void {
@@ -530,7 +624,6 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
     this.zoom = 1.0;
     this.panX = 0;
     this.panY = 0;
-    this.showCoverReference = false;
   }
 
   onCanvasWheel(event: WheelEvent): void {
@@ -557,33 +650,29 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
   }
 
   /**
-   * 开始拖拽画布（空白区域左键、Shift + 左键或鼠标中键）
+   * 开始拖拽画布（空白区域左键直接拖拽、Shift + 左键或鼠标中键）
    */
   onCanvasMouseDown(event: MouseEvent): void {
     if (this.draggingLineId) {
       return;
     }
 
-    const target = event.target as HTMLElement;
-    const isCanvas = target.classList.contains('crop-canvas');
-
-    if (event.button === 1 || (event.button === 0 && event.shiftKey)) {
-      event.preventDefault();
-      event.stopPropagation();
-      this.resetBlankAreaPointerState();
-      this.startPanning(event);
+    if (event.button !== 0 && event.button !== 1) {
       return;
     }
 
-    if (event.button === 0 && isCanvas) {
-      event.preventDefault();
-      this.resetBlankAreaPointerState();
-      this.blankAreaPointerDown = true;
-      this.blankAreaStartX = event.clientX;
-      this.blankAreaStartY = event.clientY;
-      document.addEventListener('mousemove', this.onBlankAreaMouseMove);
-      document.addEventListener('mouseup', this.onBlankAreaMouseUp);
+    const target = event.target as HTMLElement;
+    const lineElement = target.closest('.crop-line');
+    const isCanvasSurface = !!target.closest('.crop-canvas');
+
+    if (lineElement || !isCanvasSurface) {
+      return;
     }
+
+    event.preventDefault();
+    event.stopPropagation();
+    this.resetBlankAreaPointerState();
+    this.startPanning(event);
   }
 
   private startPanning(event: MouseEvent): void {
@@ -629,13 +718,8 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
   /**
    * 获取画布容器样式（应用缩放和偏移）
    */
-  getCanvasContainerStyle(): any {
-    return {
-      transform: `translate(${this.panX}px, ${this.panY}px) scale(${this.zoom})`,
-      transformOrigin: '0 0',
-      width: `${this.displayWidth}px`,
-      height: `${this.displayHeight}px`,
-    };
+  get canvasTransform(): string {
+    return `translate(${this.panX}px, ${this.panY}px) scale(${this.zoom})`;
   }
 
   private revokePreviewUrls(): void {
@@ -645,10 +729,13 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
     if (this.spinePreviewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(this.spinePreviewUrl);
     }
+    if (this.frontPreviewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(this.frontPreviewUrl);
+    }
     this.backPreviewUrl = '';
     this.spinePreviewUrl = '';
-    this.previewLoadFailed.back = false;
-    this.previewLoadFailed.spine = false;
+    this.frontPreviewUrl = '';
+    this.lastPreviewKey = '';
     this.sourceImage = null;
     this.sourceImagePromise = null;
     this.sourceImageUrl = '';

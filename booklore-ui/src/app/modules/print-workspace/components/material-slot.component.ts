@@ -14,8 +14,19 @@ Booklore Print Workspace Material Slot Component
 
 import { Component, Input, Output, EventEmitter } from "@angular/core";
 import { CommonModule } from "@angular/common";
-import { MaterialService, MaterialType } from "../services/material.service";
+import {
+  MaterialService,
+  MaterialType,
+  UploadMaterialType,
+} from "../services/material.service";
 import { WorkspaceState } from "../services/print.service";
+
+interface MaterialHistoryItem {
+  filename: string;
+  type: MaterialType;
+  label: string;
+  active: boolean;
+}
 
 @Component({
   selector: "app-material-slot",
@@ -40,13 +51,35 @@ import { WorkspaceState } from "../services/print.service";
         display: flex;
         align-items: center;
         justify-content: space-between;
+        gap: 8px;
         flex-shrink: 0;
+      }
+
+      .card-title-wrap {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        flex-wrap: wrap;
       }
 
       .card-title {
         font-size: 14px;
         font-weight: 600;
         color: #e6edf3;
+      }
+
+      .title-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 600;
+        color: #9fc2ff;
+        background: rgba(79, 124, 255, 0.14);
+        border: 1px solid rgba(79, 124, 255, 0.28);
+        white-space: nowrap;
       }
 
       .spine-badge {
@@ -137,7 +170,25 @@ import { WorkspaceState } from "../services/print.service";
         flex-shrink: 0;
         align-items: center;
         overflow-x: auto;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
         padding: 4px 0;
+      }
+
+      .history-strip.roomy {
+        margin-top: 8px;
+      }
+
+      .history-strip::-webkit-scrollbar {
+        display: none;
+      }
+
+      .thumb-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        flex-shrink: 0;
       }
 
       .thumb-wrapper {
@@ -170,6 +221,13 @@ import { WorkspaceState } from "../services/print.service";
       }
       .thumb-wrapper.active {
         border: 2px solid #4f7cff;
+      }
+
+      .thumb-label {
+        font-size: 10px;
+        color: #7f93b0;
+        text-align: center;
+        white-space: nowrap;
       }
 
       .thumb-overlay-delete {
@@ -220,7 +278,10 @@ import { WorkspaceState } from "../services/print.service";
   template: `
     <div class="material-card">
       <div class="card-header">
-        <span class="card-title">{{ title }}</span>
+        <div class="card-title-wrap">
+          <span class="card-title">{{ title }}</span>
+          <span class="title-badge" *ngIf="$any(this).statusBadge">{{ $any(this).statusBadge }}</span>
+        </div>
       </div>
 
       <span class="spine-badge" *ngIf="type === 'spine'"
@@ -242,20 +303,22 @@ import { WorkspaceState } from "../services/print.service";
         </div>
       </div>
 
-      <div class="history-strip">
-        <div
-          class="thumb-wrapper"
-          *ngFor="let item of history; trackBy: trackHistory"
-          [class.active]="selected === item"
-          (click)="material.selectMaterial(bookId, type, item)"
-        >
-          <img
-            [src]="material.getAssetUrl(bookId, type, item)"
-            draggable="false"
-          />
-          <div class="thumb-overlay-delete" *ngIf="canDelete(item)">
-            <i class="pi pi-trash" (click)="delete(item, $event)"></i>
+      <div class="history-strip" [class.roomy]="type !== 'spine'">
+        <div class="thumb-item" *ngFor="let item of normalizedHistory; trackBy: trackHistory">
+          <div
+            class="thumb-wrapper"
+            [class.active]="item.active"
+            (click)="select(item)"
+          >
+            <img
+              [src]="material.getAssetUrl(bookId, item.type, item.filename)"
+              draggable="false"
+            />
+            <div class="thumb-overlay-delete" *ngIf="canDelete(item)">
+              <i class="pi pi-trash" (click)="delete(item, $event)"></i>
+            </div>
           </div>
+          <div class="thumb-label" *ngIf="item.label">{{ item.label }}</div>
         </div>
 
         <div class="thumb-upload" (click)="fileInput.click()">
@@ -275,42 +338,65 @@ import { WorkspaceState } from "../services/print.service";
 })
 export class MaterialSlotComponent {
   @Input() title!: string;
-  @Input() type!: MaterialType;
+  @Input() type!: UploadMaterialType;
   @Input() selected!: string | null;
   @Input() url!: string;
-  @Input() history!: string[];
+  @Input() history!: Array<string | MaterialHistoryItem>;
   @Input() spineWidth!: number;
   @Input() bookId!: number;
+  @Input() statusBadge?: string;
+  @Input() historyNote?: string;
 
   @Output() previewRequest = new EventEmitter<string>();
   @Output() deleted = new EventEmitter<WorkspaceState>();
-  @Output() uploaded = new EventEmitter<void>();
+  @Output() uploaded = new EventEmitter<WorkspaceState>();
+  @Output() materialSelected = new EventEmitter<WorkspaceState>();
 
   constructor(public material: MaterialService) {}
+
+  get normalizedHistory(): MaterialHistoryItem[] {
+    return this.history.map(item => {
+      if (typeof item === "string") {
+        return {
+          filename: item,
+          type: this.type,
+          label: "",
+          active: this.selected === item,
+        };
+      }
+      return item;
+    });
+  }
 
   onFileChange(event: Event) {
     const input = event.target as HTMLInputElement;
     if (!input.files?.length) return;
     const file = input.files[0];
     this.material.uploadMaterial(this.bookId, this.type, file).subscribe({
-      next: () => this.uploaded.emit(),
+      next: (ws) => this.uploaded.emit(ws),
       error: (err) => console.error("Upload failed:", err),
     });
   }
 
-  trackHistory(index: number, item: string) {
-    return item;
+  trackHistory(index: number, item: MaterialHistoryItem) {
+    return `${item.type}:${item.filename}`;
   }
 
-  canDelete(item: string): boolean {
-    if (this.type === "cover") return this.history.length > 1;
-    return true;
+  select(item: MaterialHistoryItem): void {
+    this.material.selectMaterial(this.bookId, item.type, item.filename).subscribe({
+      next: (ws) => this.materialSelected.emit(ws),
+      error: (err) => console.error("Select failed:", err),
+    });
   }
 
-  delete(item: string, event: Event) {
+  canDelete(item: MaterialHistoryItem): boolean {
+    return item.type !== "cover";
+  }
+
+  delete(item: MaterialHistoryItem, event: Event) {
     event.stopPropagation();
     if (!this.canDelete(item)) return;
-    this.material.deleteMaterial(this.bookId, this.type, item).subscribe({
+    this.material.deleteMaterial(this.bookId, item.type, item.filename).subscribe({
       next: (ws) => this.deleted.emit(ws),
       error: (err) => console.error("Delete failed:", err),
     });

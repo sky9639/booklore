@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
@@ -369,21 +370,45 @@ def test_gemini_connection(config_override: Optional[dict] = None) -> dict:
 
 def _extract_image_from_response(data: dict, target_size: Optional[tuple[int, int]] = None) -> Image.Image:
     candidates = data.get("candidates") or []
+    inspected_parts: list[str] = []
+
     for candidate in candidates:
-        parts = ((candidate.get("content") or {}).get("parts") or [])
+        content = candidate.get("content") or {}
+        parts = content.get("parts") or []
         for part in parts:
-            inline_data = part.get("inlineData") or part.get("inline_data")
+            inspected_parts.append(",".join(sorted(part.keys())))
+
+            inline_data = (
+                part.get("inlineData")
+                or part.get("inline_data")
+                or part.get("image")
+                or part.get("imageData")
+            )
             if not inline_data:
+                file_data = part.get("fileData") or part.get("file_data") or {}
+                if (file_data.get("mimeType") or file_data.get("mime_type", "")).startswith("image/"):
+                    raise RuntimeError("Gemini 返回的是图片文件引用而不是内联图片数据，当前通道暂不支持 fileData 拉取")
                 continue
-            mime_type = inline_data.get("mimeType") or inline_data.get("mime_type", "")
-            if not mime_type.startswith("image/"):
+
+            mime_type = (
+                inline_data.get("mimeType")
+                or inline_data.get("mime_type")
+                or inline_data.get("contentType")
+                or inline_data.get("content_type", "")
+            )
+            data_b64 = inline_data.get("data") or inline_data.get("base64") or inline_data.get("bytesBase64") or ""
+            if not mime_type.startswith("image/") or not data_b64:
                 continue
-            raw = base64.b64decode(inline_data.get("data", ""))
+
+            raw = base64.b64decode(data_b64)
             image = Image.open(io.BytesIO(raw)).convert("RGB")
             if target_size:
                 image = image.resize(target_size, Image.Resampling.LANCZOS)
             return image
-    raise RuntimeError("Gemini 响应中未找到图片数据")
+
+    response_excerpt = json.dumps(data, ensure_ascii=False)[:1200]
+    parts_summary = "; ".join(inspected_parts[:10]) or "<no parts>"
+    raise RuntimeError(f"Gemini 响应中未找到图片数据，parts keys: {parts_summary}，response: {response_excerpt}")
 
 
 def _save_image(path: Path, image: Image.Image, dpi: int = 400) -> None:
@@ -397,6 +422,23 @@ def _save_image(path: Path, image: Image.Image, dpi: int = 400) -> None:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path, format="PNG", dpi=(dpi, dpi))
+
+
+def _build_timestamp_suffix() -> str:
+    """
+    生成带高精度时间戳和唯一标识的文件名后缀。
+
+    格式：YYYYMMDD_HHMMSS_微秒_短UUID
+    示例：20260325_143052_123456_a3f9
+
+    Returns:
+        唯一文件名后缀字符串
+    """
+    now = datetime.now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S_%f")
+    unique_suffix = uuid.uuid4().hex[:4]
+    return f"{timestamp}_{unique_suffix}"
+
 
 
 def _save_generated_image(print_root: str, category: str, image: Image.Image, prefix: str, dpi: int = 400) -> str:
@@ -414,7 +456,7 @@ def _save_generated_image(print_root: str, category: str, image: Image.Image, pr
         保存的文件名
     """
     target_dir = Path(print_root) / category
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = _build_timestamp_suffix()
     filename = f"{prefix}_{category}_{timestamp}.png"
     _save_image(target_dir / filename, image, dpi=dpi)
     return filename
@@ -422,7 +464,7 @@ def _save_generated_image(print_root: str, category: str, image: Image.Image, pr
 
 def _save_spread_preview(print_root: str, image: Image.Image) -> str:
     preview_dir = Path(print_root) / "preview"
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = _build_timestamp_suffix()
     filename = f"ai_spread_{timestamp}.png"
     _save_image(preview_dir / filename, image)
     return filename
@@ -554,6 +596,12 @@ def _generate_spread_gemini(
         raise ValueError("GEMINI_API_KEY 未在 booklore.env 中配置")
 
     prompt, template = build_prompt(book_name, template_id=template_id)
+    prompt = (
+        f"{prompt}\n\n"
+        "【输出要求】必须直接返回最终生成的图片结果。"
+        "不要返回任何文字说明、Markdown、代码块、前言、后记或额外解释。"
+        "如果无法生成图片，也不要输出描述性文字。"
+    )
 
     if progress_callback:
         progress_callback(5, "【第一步】读取当前提示词模板")
@@ -576,41 +624,62 @@ def _generate_spread_gemini(
         "Authorization": f"Bearer {GEMINI_API_KEY}",
     }
     url = f"{GEMINI_API_URL}{GEMINI_API_PATH}".replace("{model}", GEMINI_IMAGE_MODEL)
-    payload = {
-        "contents": [{
-            "parts": [
-                {"text": prompt},
-                {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
-            ]
-        }],
-        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
-    }
+
+    def request_generation(prompt_text: str) -> tuple[dict, dict]:
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt_text},
+                    {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
+                ]
+            }],
+            "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+        }
+
+        response = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=GEMINI_TIMEOUT,
+        )
+        if not response.ok:
+            logger.error("[Gemini Spread] API 错误 %s: %s", response.status_code, response.text[:400])
+            raise RuntimeError(f"Gemini 请求失败: HTTP {response.status_code} - {response.text[:300]}")
+
+        data = response.json()
+        usage = data.get("usageMetadata", {}) or {}
+        token_usage = {
+            "input_tokens": usage.get("promptTokenCount", 0),
+            "output_tokens": usage.get("candidatesTokenCount", 0),
+            "total_tokens": usage.get("totalTokenCount", 0),
+        }
+        return data, token_usage
 
     if progress_callback:
         progress_callback(30, "【第三步】已发送 Gemini 请求，等待返回展开图")
 
-    response = requests.post(
-        url,
-        headers=headers,
-        json=payload,
-        timeout=GEMINI_TIMEOUT,
-    )
-    if not response.ok:
-        logger.error("[Gemini Spread] API 错误 %s: %s", response.status_code, response.text[:400])
-        raise RuntimeError(f"Gemini 请求失败: HTTP {response.status_code} - {response.text[:300]}")
-
-    data = response.json()
-    usage = data.get("usageMetadata", {}) or {}
-    token_usage = {
-        "input_tokens": usage.get("promptTokenCount", 0),
-        "output_tokens": usage.get("candidatesTokenCount", 0),
-        "total_tokens": usage.get("totalTokenCount", 0),
-    }
+    data, token_usage = request_generation(prompt)
 
     if progress_callback:
         progress_callback(70, "【第四步】Gemini 已返回，开始提取图片")
 
-    spread = _extract_image_from_response(data, target_size=None)
+    try:
+        spread = _extract_image_from_response(data, target_size=None)
+    except RuntimeError as first_error:
+        if "未找到图片数据" not in str(first_error):
+            raise
+
+        logger.warning("[Gemini Spread] first attempt returned text-only response, retrying once")
+        if progress_callback:
+            progress_callback(75, "【第四步】首次返回非图片结果，自动重试一次")
+
+        retry_prompt = (
+            f"{prompt}\n\n"
+            "再次强调：这次只能输出图片本体，禁止输出任何文字。"
+        )
+        data, token_usage = request_generation(retry_prompt)
+        spread = _extract_image_from_response(data, target_size=None)
+
     crop_lines = _guess_crop_lines(spread.size, page_w, page_h, spine_w)
     front_img, back_img, spine_img, crop_lines = crop_gemini_spread(
         spread,
@@ -696,7 +765,7 @@ def save_cropped_materials(
     page_w, page_h = TRIM_SIZE_PX.get(trim_size, TRIM_SIZE_PX["A5"])
     spine_px = max(1, round(spine_width_mm * 300 / 25.4))  # 基准DPI=300
 
-    _front_img, back_img, spine_img, crop_lines = crop_gemini_spread(
+    front_img, back_img, spine_img, crop_lines = crop_gemini_spread(
         spread,
         page_w,
         page_h,
@@ -705,12 +774,18 @@ def save_cropped_materials(
         spine_dpi=600,  # 书脊使用600 DPI，保持文字清晰
     )
 
+    front_output_dir = Path(print_root) / "front_output"
+    timestamp = _build_timestamp_suffix()
+    front_filename = f"ai_front_{timestamp}.png"
+    _save_image(front_output_dir / front_filename, front_img, dpi=300)
+
     # 封底使用标准300 DPI
     back_filename = _save_generated_image(print_root, "back", back_img, "ai", dpi=300)
     # 书脊使用600 DPI，文字更清晰
     spine_filename = _save_generated_image(print_root, "spine", spine_img, "ai", dpi=600)
 
     return {
+        "front_filename": front_filename,
         "back_filename": back_filename,
         "spine_filename": spine_filename,
         "crop_lines": crop_lines,

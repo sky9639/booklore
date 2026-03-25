@@ -1,41 +1,19 @@
-// print.service.ts
-
 import { Injectable } from "@angular/core";
 import { HttpClient } from "@angular/common/http";
 import { Observable, timeout } from "rxjs";
 import { environment } from "../../../../environments/environment";
-import { TrimSize } from "../models/workspace.model";
+import type {
+  TrimSize,
+  PrintWorkspace,
+  AiCropDraft,
+  AiCropHistoryItem
+} from "../models/workspace.model";
 
-// workspace.json 对应的 TS 结构
-export interface WorkspaceCategory {
-  selected: string | null;
-  history: string[];
-}
+// 为保持向后兼容，WorkspaceState 作为 PrintWorkspace 的别名
+export type WorkspaceState = PrintWorkspace;
+export type WorkspaceCategory = PrintWorkspace['cover'];
 
-export interface AiCropDraft {
-  spread_filename: string;
-  spread_size?: { width: number; height: number };
-  crop_lines?: { vertical_lines: number[]; horizontal_lines: number[] };
-  source_cover_filename?: string | null;
-  trim_size?: TrimSize | string;
-  spine_width_mm?: number;
-  updated_at?: string;
-}
-
-export interface WorkspaceState {
-  book_name?: string;
-  trim_size?: TrimSize;
-  page_count?: number;
-  paper_thickness?: number;
-  spine_width_mm?: number;
-  cover?: WorkspaceCategory;
-  spine?: WorkspaceCategory;
-  back?: WorkspaceCategory;
-  preview_path?: string;
-  pdf_path?: string;
-  updated_at?: string;
-  ai_crop_draft?: AiCropDraft | null;
-}
+export type { AiCropDraft, AiCropHistoryItem };
 
 export interface PrintRequest {
   trimSize?: string;
@@ -213,7 +191,17 @@ export class PrintService {
   }
 
   /** 丢弃当前 AI 裁切草稿 */
-  discardAiCropDraft(bookId: number | string): Observable<any> {
-    return this.http.post<any>(`${this.baseUrl}/print/${bookId}/workspace/ai-generate/discard`, {});
+  discardAiCropDraft(bookId: number | string): Observable<WorkspaceState> {
+    return this.http.post<WorkspaceState>(
+      `${this.baseUrl}/print/${bookId}/workspace/ai-generate/discard`,
+      {},
+    );
+  }
+
+  /** 删除历史展开图 */
+  deleteAiCropHistory(bookId: number | string, spreadFilename: string): Observable<any> {
+    return this.http.post<any>(`${this.baseUrl}/print/${bookId}/workspace/ai-generate/history/delete`, {
+      spread_filename: spreadFilename,
+    });
   }
 }

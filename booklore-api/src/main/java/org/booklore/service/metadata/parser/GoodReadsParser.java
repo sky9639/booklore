@@ -138,9 +138,20 @@ public class GoodReadsParser implements BookParser, DetailedMetadataProvider {
         return results;
     }
 
+    /**
+     * 批量抓取详细元数据
+     *
+     * 中断处理：
+     * - 检测到 InterruptedException 后立即恢复中断标志并退出循环
+     * - 不将中断当作普通错误记录，避免日志污染
+     */
     private List<BookMetadata> fetchMetadataUsingPreviews(List<BookMetadata> previews) {
         List<BookMetadata> fetchedMetadata = new ArrayList<>();
         for (BookMetadata preview : previews) {
+            if (Thread.currentThread().isInterrupted()) {
+                log.info("GoodReads: Task interrupted, stopping fetch");
+                break;
+            }
             log.info("GoodReads: Fetching metadata for: {}", preview.getTitle());
             try {
                 Document document = fetchDoc(BASE_BOOK_URL + preview.getGoodreadsId());
@@ -149,6 +160,10 @@ public class GoodReadsParser implements BookParser, DetailedMetadataProvider {
                     fetchedMetadata.add(detailedMetadata);
                 }
                 Thread.sleep(ThreadLocalRandom.current().nextLong(500, 1501));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.info("GoodReads: Fetch interrupted for book: {}", preview.getGoodreadsId());
+                break;
             } catch (Exception e) {
                 log.error("Error fetching metadata for book: {}", preview.getGoodreadsId(), e);
             }
@@ -627,8 +642,8 @@ public class GoodReadsParser implements BookParser, DetailedMetadataProvider {
                     .execute();
             return response.parse();
         } catch (IOException e) {
-            log.error("Error parsing url: {}", url, e);
-            throw new RuntimeException(e);
+            log.warn("GoodReads request failed for url: {} - {}", url, e.getMessage());
+            throw new RuntimeException("GoodReads request failed", e);
         }
     }
 }

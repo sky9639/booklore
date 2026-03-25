@@ -58,6 +58,49 @@ export interface MaterialSlot {
 }
 
 /**
+ * AI 裁切草稿
+ *
+ * 用户在 Gemini 裁切弹窗中调整裁切线时，
+ * 后端会将当前草稿状态保存到 workspace.ai_crop_draft。
+ *
+ * 生命周期：
+ * - 用户点击"生成跨页"后创建
+ * - 用户调整裁切线时更新
+ * - 用户点击"保存"后清空，并将结果写入 front_output/spine/back + ai_crop_history
+ * - 用户点击"丢弃"后清空
+ */
+export interface AiCropDraft {
+  spread_filename: string;
+  spread_size?: { width: number; height: number };
+  crop_lines?: { vertical_lines: number[]; horizontal_lines: number[] };
+  source_cover_filename?: string | null;
+  trim_size?: TrimSize | string;
+  spine_width_mm?: number;
+  updated_at?: string;
+}
+
+/**
+ * AI 裁切历史项
+ *
+ * 每次用户保存裁切结果后，会在 workspace.ai_crop_history 中新增一条记录。
+ *
+ * 历史项与草稿结构相同，但语义不同：
+ * - 草稿是"正在编辑的临时状态"
+ * - 历史是"已保存的确定结果"
+ */
+export interface AiCropHistoryItem extends AiCropDraft {}
+
+export interface SpreadPreviewItem {
+  spreadFilename: string;
+  imageUrl: string;
+  spreadWidth: number;
+  spreadHeight: number;
+  cropLines: { vertical_lines: number[]; horizontal_lines: number[] };
+  sourceCoverUrl: string;
+  updatedAt?: string;
+}
+
+/**
  * Print Workspace 主结构
  *
  * 代表一本书的拼版工作区。
@@ -65,6 +108,7 @@ export interface MaterialSlot {
  * 包含：
  * - 成书参数
  * - 素材信息
+ * - AI 裁切状态
  */
 export interface PrintWorkspace {
   /**
@@ -108,4 +152,40 @@ export interface PrintWorkspace {
    * 封底素材
    */
   back: MaterialSlot;
+
+  /**
+   * AI 裁切输出（封面 / 书脊 / 封底）
+   *
+   * 优先级规则：
+   * front_output.selected > cover.selected
+   *
+   * 即：如果 front_output.selected 存在，则封面显示 front_output.selected；
+   * 否则显示 cover.selected。
+   */
+  front_output?: MaterialSlot;
+
+  /**
+   * 预览图路径（合成后的完整封面预览）
+   */
+  preview_path?: string | null;
+
+  /**
+   * PDF 路径（最终生成的 PDF）
+   */
+  pdf_path?: string | null;
+
+  /**
+   * 最后更新时间
+   */
+  updated_at?: string;
+
+  /**
+   * AI 裁切草稿
+   */
+  ai_crop_draft?: AiCropDraft | null;
+
+  /**
+   * AI 裁切历史
+   */
+  ai_crop_history?: AiCropHistoryItem[];
 }

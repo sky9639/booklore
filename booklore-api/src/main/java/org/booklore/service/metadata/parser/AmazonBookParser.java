@@ -112,6 +112,10 @@ public class AmazonBookParser implements BookParser, DetailedMetadataProvider {
         List<BookMetadata> results = new ArrayList<>();
         for (int i = 0; i < amazonBookIds.size() && results.size() < COUNT_DETAILED_METADATA_TO_GET; i++) {
             try {
+                if (Thread.currentThread().isInterrupted()) {
+                    log.info("Amazon: Task interrupted, stopping fetch");
+                    break;
+                }
                 if (i > 0) {
                     Thread.sleep(ThreadLocalRandom.current().nextLong(500, 1501));
                 }
@@ -121,9 +125,14 @@ public class AmazonBookParser implements BookParser, DetailedMetadataProvider {
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                log.info("Amazon: Fetch interrupted for ASIN: {}", amazonBookIds.get(i));
                 break;
             } catch (Exception e) {
-                log.error("Error fetching metadata for ASIN: {}", amazonBookIds.get(i), e);
+                if (Thread.currentThread().isInterrupted()) {
+                    log.info("Amazon: Fetch interrupted for ASIN: {}", amazonBookIds.get(i));
+                    break;
+                }
+                log.warn("Amazon: Failed to fetch metadata for ASIN {}: {}", amazonBookIds.get(i), e.getMessage());
             }
         }
         return results;
@@ -837,11 +846,11 @@ public class AmazonBookParser implements BookParser, DetailedMetadataProvider {
                 log.info("Amazon internal server error (500). Please note: this is NOT a Booklore bug. Likely causes include: temporary server issues or anti-bot measures. Action required: Retry later or select an alternative metadata source in the Metadata 2 UI. URL: {}", url);
                 throw new AmazonAntiScrapingException("Amazon 500 Internal Server Error");
             }
-            log.error("HTTP error fetching URL. Status={}, URL=[{}]", e.getStatusCode(), url, e);
-            throw new RuntimeException(e);
+            log.warn("Amazon HTTP request failed. Status={}, URL=[{}]", e.getStatusCode(), url);
+            throw new RuntimeException("Amazon HTTP request failed", e);
         } catch (IOException e) {
-            log.error("Error parsing url: {}", url, e);
-            throw new RuntimeException(e);
+            log.warn("Amazon request failed for url: {} - {}", url, e.getMessage());
+            throw new RuntimeException("Amazon request failed", e);
         }
     }
 

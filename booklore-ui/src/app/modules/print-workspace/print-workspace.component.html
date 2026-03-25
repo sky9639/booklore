@@ -151,9 +151,8 @@
         <div class="input-unit">
           <input
             type="number"
-            [ngModel]="workspace?.page_count"
-            (ngModelChange)="workspace && (workspace.page_count = +$event)"
-            (change)="recalculateSpine()"
+            [ngModel]="vm.pageCount"
+            (ngModelChange)="onPageCountChange($event)"
           />
           <span>页</span>
         </div>
@@ -164,9 +163,8 @@
           <input
             type="number"
             step="0.01"
-            [ngModel]="workspace?.paper_thickness"
-            (ngModelChange)="workspace && (workspace.paper_thickness = +$event)"
-            (change)="recalculateSpine()"
+            [ngModel]="vm.paperThickness"
+            (ngModelChange)="onPaperThicknessChange($event)"
           />
           <span>mm</span>
         </div>
@@ -179,8 +177,8 @@
           class="param-input"
           type="number"
           step="0.01"
-          [ngModel]="workspace?.spine_width_mm"
-          (ngModelChange)="workspace && (workspace.spine_width_mm = +$event)"
+          [ngModel]="vm.spineWidth"
+          (ngModelChange)="onSpineWidthChange($event)"
         />
         <span>mm</span>
       </div>
@@ -193,30 +191,20 @@
   <!-- ===================== STEP2 素材准备 ===================== -->
   <div class="step2-wrapper">
     <div class="card step2">
-      <div class="section-header" style="margin-bottom: 12px">
-        <div class="section-title" style="margin-bottom: 0">🧩 素材准备</div>
+      <div class="section-header section-header-spacious">
+        <div class="section-title section-title-tight">🧩 素材准备</div>
 
         <div class="ai-actions">
           <button
-            class="gear-btn"
-            (click)="openAiConfig()"
-            title="AI 配置"
-          >
-            <i class="pi pi-cog"></i>
-          </button>
-
-          <button
             class="blue-action-btn ai-generate-btn"
-            [class.loading]="aiGenerating"
-            [disabled]="aiGenerating || !canAiGenerate"
-            (click)="onAiGenerateSpread()"
+            [disabled]="!canAiGenerate"
+            (click)="openAiCropDialog()"
             [title]="
-              canAiGenerate ? 'AI自动生成书脊和封底图片' : '请先上传封面素材'
+              canAiGenerate ? '打开 AI 裁切工作台' : '请先上传封面素材'
             "
           >
-            <span class="btn-spinner" *ngIf="aiGenerating"></span>
-            <span *ngIf="!aiGenerating">✨</span>
-            {{ aiGenerating ? aiProgressText : "AI 生成书脊 & 封底" }}
+            <span>✨</span>
+            AI裁切
           </button>
         </div>
       </div>
@@ -230,7 +218,7 @@
         替换原来的 openPreview(window.open) 逻辑
       -->
       <app-material-slot
-        title="封面"
+        [title]="vm.cover.usingFrontOutput ? '封面（裁切后）' : '封面'"
         type="cover"
         [bookId]="bookId"
         [selected]="vm.cover.selected"
@@ -238,8 +226,9 @@
         [history]="vm.cover.history"
         [spineWidth]="workspace?.spine_width_mm || 0"
         (previewRequest)="openLightbox($event)"
-        (deleted)="onMaterialDeleted($event)"
-        (uploaded)="onMaterialUploaded()"
+        (deleted)="onMaterialChanged($event)"
+        (uploaded)="onMaterialChanged($event)"
+        (materialSelected)="onMaterialChanged($event)"
       ></app-material-slot>
 
       <app-material-slot
@@ -251,8 +240,9 @@
         [history]="vm.spine.history"
         [spineWidth]="workspace?.spine_width_mm || 0"
         (previewRequest)="openLightbox($event)"
-        (deleted)="onMaterialDeleted($event)"
-        (uploaded)="onMaterialUploaded()"
+        (deleted)="onMaterialChanged($event)"
+        (uploaded)="onMaterialChanged($event)"
+        (materialSelected)="onMaterialChanged($event)"
       ></app-material-slot>
 
       <app-material-slot
@@ -264,8 +254,9 @@
         [history]="vm.back.history"
         [spineWidth]="workspace?.spine_width_mm || 0"
         (previewRequest)="openLightbox($event)"
-        (deleted)="onMaterialDeleted($event)"
-        (uploaded)="onMaterialUploaded()"
+        (deleted)="onMaterialChanged($event)"
+        (uploaded)="onMaterialChanged($event)"
+        (materialSelected)="onMaterialChanged($event)"
       ></app-material-slot>
     </div>
     </div>
@@ -287,7 +278,7 @@
     <div class="ai-log-content" #aiLogContent>
       <div class="ai-log-empty" *ngIf="aiLogMessages.length === 0">
         <i class="pi pi-info-circle"></i>
-        <span>暂无日志，点击"AI 生成书脊 & 封底"开始生成</span>
+        <span>暂无日志，打开 AI裁切 后点击“AI生图”开始生成</span>
       </div>
       <div class="ai-log-item" *ngFor="let log of aiLogMessages" [class.ai-log-highlight]="log.highlight">
         <span class="ai-log-time">{{ log.time }}</span>
@@ -505,15 +496,24 @@
 ></app-gemini-config-dialog>
 
 <app-gemini-crop-dialog
+  *ngIf="aiCropVisible"
   [visible]="aiCropVisible"
+  [generating]="aiGenerating"
+  [generateButtonText]="aiGenerating ? aiProgressText : 'AI生图'"
+  [generateErrorMessage]="aiLastResult === 'error' ? aiErrorMsg : ''"
   [spreadImageUrl]="spreadPreview?.imageUrl || ''"
   [spreadWidth]="spreadPreview?.spreadWidth || 0"
   [spreadHeight]="spreadPreview?.spreadHeight || 0"
   [initialLines]="spreadPreview?.cropLines || null"
-  [sourceCoverUrl]="spreadPreview?.sourceCoverUrl || ''"
+  [historyItems]="spreadHistory"
+  [activeSpreadFilename]="spreadPreview?.spreadFilename || ''"
+  [saving]="cropSaving"
+  (generate)="onDialogGenerate()"
+  (openConfig)="openAiConfig()"
   (save)="onCropSave($event)"
-  (discard)="closeCrop()"
-  (cacheClose)="cacheCloseCrop()"
+  (close)="closeCrop()"
+  (historySelect)="onSpreadHistorySelect($event)"
+  (historyDelete)="onSpreadHistoryDelete($event)"
 ></app-gemini-crop-dialog>
 
 <!-- ===================== [V1.8 问题1] Lightbox 遮罩层 ===================== -->

@@ -81,7 +81,9 @@ public class BookdropMetadataService {
             try {
                 Thread.sleep(ThreadLocalRandom.current().nextLong(250, 1250));
             } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+                Thread.currentThread().interrupt();
+                log.info("Bookdrop metadata fetch interrupted");
+                throw new RuntimeException("Metadata fetch interrupted", e);
             }
         }
 
