@@ -16,6 +16,7 @@ dist/
 .github/
 .idea/
 .vscode/
+.worktrees/
 .DS_Store
 *.swp
 *.tmp
