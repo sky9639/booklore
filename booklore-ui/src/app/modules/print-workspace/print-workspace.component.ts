@@ -341,7 +341,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     if (ws.trim_size === "A4") {
       this.previewPagesCache = [vm.cover.url, spineUrl, backUrl];
       this.compositeCacheKey = this.compositeUrl;
-      this.lastOutputSheetSize = ws.output_sheet_size;
+      this.lastOutputSheetSize = ws.output_sheet_size ?? null;
       return this.previewPagesCache;
     }
 
