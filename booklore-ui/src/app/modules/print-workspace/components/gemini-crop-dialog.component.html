@@ -124,6 +124,18 @@
           <div class="preview-title">封底预览</div>
           <div class="preview-image-box">
             <img *ngIf="backPreviewUrl" [src]="backPreviewUrl" class="preview-image" draggable="false" (error)="onPreviewImageError('back')" />
+            <div
+              *ngIf="backPreviewUrl"
+              class="preview-overlay"
+              tabindex="0"
+              role="button"
+              [attr.aria-label]="'放大查看封底预览'"
+              (click)="openLightbox(backPreviewUrl, $event)"
+              (keydown.enter)="openLightbox(backPreviewUrl, $event)"
+              (keydown.space)="$event.preventDefault(); openLightbox(backPreviewUrl, $event)"
+            >
+              <i class="pi pi-search-plus"></i>
+            </div>
             <div class="preview-placeholder ready" *ngIf="!backPreviewUrl">
               <div class="placeholder-icon">背</div>
               <div class="placeholder-title">封底预览</div>
@@ -136,6 +148,18 @@
           <div class="preview-title">书脊预览</div>
           <div class="preview-image-box spine-box">
             <img *ngIf="spinePreviewUrl" [src]="spinePreviewUrl" class="preview-image spine-image" draggable="false" (error)="onPreviewImageError('spine')" />
+            <div
+              *ngIf="spinePreviewUrl"
+              class="preview-overlay"
+              tabindex="0"
+              role="button"
+              [attr.aria-label]="'放大查看书脊预览'"
+              (click)="openLightbox(spinePreviewUrl, $event)"
+              (keydown.enter)="openLightbox(spinePreviewUrl, $event)"
+              (keydown.space)="$event.preventDefault(); openLightbox(spinePreviewUrl, $event)"
+            >
+              <i class="pi pi-search-plus"></i>
+            </div>
             <div class="preview-placeholder ready" *ngIf="!spinePreviewUrl">
               <div class="placeholder-icon slim">脊</div>
               <div class="placeholder-title">书脊预览</div>
@@ -148,6 +172,18 @@
           <div class="preview-title">封面预览</div>
           <div class="preview-image-box">
             <img *ngIf="frontPreviewUrl" [src]="frontPreviewUrl" class="preview-image" draggable="false" (error)="onPreviewImageError('front')" />
+            <div
+              *ngIf="frontPreviewUrl"
+              class="preview-overlay"
+              tabindex="0"
+              role="button"
+              [attr.aria-label]="'放大查看封面预览'"
+              (click)="openLightbox(frontPreviewUrl, $event)"
+              (keydown.enter)="openLightbox(frontPreviewUrl, $event)"
+              (keydown.space)="$event.preventDefault(); openLightbox(frontPreviewUrl, $event)"
+            >
+              <i class="pi pi-search-plus"></i>
+            </div>
             <div class="preview-placeholder ready" *ngIf="!frontPreviewUrl">
               <div class="placeholder-icon">封</div>
               <div class="placeholder-title">封面预览</div>
@@ -166,6 +202,22 @@
           {{ saving ? '保存中...' : '保存并应用裁切' }}
         </button>
       </div>
+    </div>
+  </div>
+
+  <!-- Lightbox 全屏预览 -->
+  <div class="crop-lightbox-overlay" *ngIf="lightboxUrl" (click)="closeLightbox()">
+    <div class="crop-lightbox-container" (click)="$event.stopPropagation()">
+      <button
+        #lightboxCloseBtn
+        class="crop-lightbox-close"
+        (click)="closeLightbox()"
+        aria-label="关闭预览"
+        tabindex="0"
+      >
+        <i class="pi pi-times"></i>
+      </button>
+      <img [src]="lightboxUrl" draggable="false" alt="预览大图" />
     </div>
   </div>
 </div>

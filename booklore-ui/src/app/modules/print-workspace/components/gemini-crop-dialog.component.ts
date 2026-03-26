@@ -83,6 +83,11 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
   private previewUpdateScheduled = false;
   private lastPreviewKey = '';
 
+  // Lightbox 状态
+  lightboxUrl = '';
+  private lightboxTriggerElement: HTMLElement | null = null;
+  @ViewChild('lightboxCloseBtn') lightboxCloseBtn?: ElementRef<HTMLButtonElement>;
+
   private readonly minDisplayGap = 8;
   private readonly blankAreaDragThreshold = 5;
 
@@ -267,6 +272,7 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
     if (!spreadFilename || spreadFilename === this.activeSpreadFilename) {
       return;
     }
+    this.closeLightbox();
     this.historySelect.emit(spreadFilename);
   }
 
@@ -431,6 +437,14 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
   @HostListener('window:keydown', ['$event'])
   onKeyDown(event: KeyboardEvent): void {
     if (!this.visible) return;
+
+    // Lightbox Escape 键优先处理
+    if (event.key === 'Escape' && this.lightboxUrl) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.closeLightbox();
+      return;
+    }
 
     // Esc 键取消选中
     if (event.key === 'Escape') {
@@ -603,11 +617,13 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
   }
 
   onSave(): void {
+    this.closeLightbox();
     const payload = this.getSaveLines();
     this.save.emit(payload);
   }
 
   onClose(): void {
+    this.closeLightbox();
     this.resetInteractionState(false);
     this.close.emit();
   }
@@ -740,5 +756,31 @@ export class GeminiCropDialogComponent implements OnInit, OnDestroy, OnChanges, 
     this.sourceImagePromise = null;
     this.sourceImageUrl = '';
     this.previewRenderToken++;
+  }
+
+  openLightbox(url: string, event: Event): void {
+    const triggerElement = event.currentTarget as HTMLElement;
+    if (!url || !triggerElement) return;
+
+    this.lightboxUrl = url;
+    this.lightboxTriggerElement = triggerElement;
+
+    // 将焦点移入 lightbox（下一帧执行，确保 DOM 已渲染）
+    setTimeout(() => {
+      const closeBtn = this.lightboxCloseBtn?.nativeElement;
+      if (closeBtn) {
+        closeBtn.focus();
+      }
+    }, 0);
+  }
+
+  closeLightbox(): void {
+    this.lightboxUrl = '';
+
+    // 焦点返回触发元素
+    if (this.lightboxTriggerElement) {
+      this.lightboxTriggerElement.focus();
+      this.lightboxTriggerElement = null;
+    }
   }
 }

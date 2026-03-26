@@ -613,6 +613,38 @@ $transition-normal: 200ms ease;
   }
 }
 
+.preview-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transition: opacity 200ms ease;
+  cursor: zoom-in;
+  z-index: 2;
+
+  &:hover {
+    opacity: 1;
+  }
+
+  &:focus {
+    opacity: 1;
+    outline: 2px solid rgba(79, 143, 255, 0.6);
+    outline-offset: -2px;
+  }
+
+  i {
+    font-size: 22px;
+    color: white;
+    background: rgba(0, 0, 0, 0.55);
+    border-radius: 50%;
+    padding: 8px;
+    pointer-events: none;
+  }
+}
+
 .preview-image {
   display: block;
   max-width: 100%;
@@ -782,4 +814,65 @@ $transition-normal: 200ms ease;
   .preview-panel {
     grid-template-columns: 1fr;
   }
+}
+
+// Lightbox 全屏预览样式
+.crop-lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: 12500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+  animation: fadeIn 200ms ease;
+}
+
+.crop-lightbox-container {
+  position: relative;
+  max-width: 95vw;
+  max-height: 95vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+
+.crop-lightbox-close {
+  position: absolute;
+  top: -50px;
+  right: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 150ms ease, border-color 150ms ease, transform 150ms ease;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.4);
+    transform: scale(1.1);
+  }
+
+  &:focus {
+    outline: 2px solid rgba(79, 143, 255, 0.8);
+    outline-offset: 2px;
+  }
+}
+
+.crop-lightbox-container img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
 }
