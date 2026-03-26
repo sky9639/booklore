@@ -96,6 +96,9 @@ def upgrade_workspace_schema(ws: dict, request) -> dict:
         from datetime import datetime, timezone
         ws["updated_at"] = datetime.now(timezone.utc).isoformat()
 
+    if "output_sheet_size" not in ws:
+        ws["output_sheet_size"] = "A4"
+
     if "ai_crop_draft" not in ws:
         ws["ai_crop_draft"] = None
 

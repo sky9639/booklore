@@ -117,9 +117,14 @@ export interface PrintWorkspace {
   book_name?: string;
 
   /**
-   * 成书尺寸
+   * 图像打印尺寸
    */
   trim_size: TrimSize;
+
+  /**
+   * 输出纸张尺寸
+   */
+  output_sheet_size?: TrimSize;
 
   /**
    * 页数

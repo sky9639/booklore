@@ -17,7 +17,8 @@ Booklore Print Workspace Component
 */
 
 import { Component, OnInit, OnDestroy, HostListener, ChangeDetectorRef, ViewChild, ElementRef } from "@angular/core";
-import { Subscription } from "rxjs";
+import { Subscription, Subject } from "rxjs";
+import { debounceTime, switchMap } from "rxjs/operators";
 import { CommonModule } from "@angular/common";
 import { FormsModule } from "@angular/forms";
 import { Router, ActivatedRoute } from "@angular/router";
@@ -41,6 +42,7 @@ import { calcSpineWidth } from "./utils/dimension.util";
 interface WorkspaceViewModel {
   bookName?: string;
   trimSize: TrimSize;
+  outputSheetSize: TrimSize;
   pageCount: number;
   paperThickness: number;
   spineWidth: number;
@@ -94,7 +96,10 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   private compositeCache = new Map<string, string>();
   private compositeRenderToken = 0;
   private wsSub?: Subscription;
+  private saveParamsSubject = new Subject<void>();
+  private saveParamsSubscription?: Subscription;
   private lastWorkspaceRef: WorkspaceState | null = null;
+  private lastOutputSheetSize: TrimSize | null = null;
   private workspaceViewModelCache: WorkspaceViewModel | null = null;
   private previewPagesCache: string[] = [];
   private compositeCacheKey = '';
@@ -163,16 +168,43 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       return;
     }
 
+    // 设置 saveParams 防抖订阅
+    this.saveParamsSubscription = this.saveParamsSubject.pipe(
+      debounceTime(500),
+      switchMap(() => this.executeSaveParams())
+    ).subscribe({
+      next: (nextWs) => this.workspaceState.setWorkspace(nextWs),
+      error: (err) => console.error('保存拼版参数失败', err),
+    });
+
     // 订阅 workspace$ — 素材上传/删除/选择后后端返回新 ws，
     // setWorkspace() 触发这里，自动清缓存并刷新拼版预览
     this.wsSub = this.workspaceState.workspace$.subscribe((ws) => {
       if (!ws) return;
-      this.compositeCache.clear();
-      this.lastWorkspaceRef = ws;
+
+      const needsCacheClear = this.shouldClearCacheOnWorkspaceUpdate(ws);
+
+      console.log('[workspace$ 订阅] needsCacheClear:', needsCacheClear, 'ws:', ws);
+
+      // 任何 workspace 更新都必须失效 ViewModel 缓存，
+      // 否则按钮 active 状态会继续读旧的 trim/output 值。
       this.workspaceViewModelCache = null;
-      this.previewPagesCache = [];
-      this.compositeCacheKey = '';
-      this.refreshComposite();
+
+      if (needsCacheClear) {
+        console.log('[workspace$ 订阅] 清除拼版缓存');
+        this.compositeCache.clear();
+        this.previewPagesCache = [];
+        this.compositeCacheKey = '';
+      } else {
+        console.log('[workspace$ 订阅] 保留拼版缓存（仅参数变更）');
+      }
+
+      this.lastWorkspaceRef = ws;
+
+      if (needsCacheClear) {
+        this.refreshComposite();
+      }
+
       this.syncSpreadHistoryFromWorkspace(ws);
       this.syncSpreadPreviewWithHistory();
     });
@@ -186,11 +218,14 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.wsSub?.unsubscribe();
+    this.saveParamsSubscription?.unsubscribe();
   }
 
   private initWorkspace(): void {
     this.print.initWorkspace(this.bookId).subscribe({
       next: (ws) => {
+        console.log('[initWorkspace] 后端返回 workspace:', ws);
+        console.log('[initWorkspace] page_count:', ws.page_count, 'paper_thickness:', ws.paper_thickness, 'spine_width_mm:', ws.spine_width_mm);
         this.workspaceState.setWorkspace(ws);
       },
       error: (err) => console.error("Workspace 初始化失败", err),
@@ -207,6 +242,8 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     if (this.workspaceViewModelCache && this.lastWorkspaceRef === ws) {
       return this.workspaceViewModelCache;
     }
+
+    console.log('[workspaceViewModel] 生成 ViewModel, ws.page_count:', ws.page_count, 'ws.paper_thickness:', ws.paper_thickness, 'ws.spine_width_mm:', ws.spine_width_mm);
 
     const coverHistory = ws.cover?.history ?? [];
     const frontOutputHistory = ws.front_output?.history ?? [];
@@ -232,6 +269,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     this.workspaceViewModelCache = {
       bookName: ws.book_name,
       trimSize: ws.trim_size,
+      outputSheetSize: ws.output_sheet_size ?? 'A4',
       pageCount: ws.page_count,
       paperThickness: ws.paper_thickness,
       spineWidth: ws.spine_width_mm,
@@ -266,13 +304,25 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       },
     };
 
+    console.log('[workspaceViewModel] 生成的 ViewModel:', {
+      trimSize: this.workspaceViewModelCache.trimSize,
+      outputSheetSize: this.workspaceViewModelCache.outputSheetSize,
+      bookName: this.workspaceViewModelCache.bookName,
+      pageCount: this.workspaceViewModelCache.pageCount,
+      paperThickness: this.workspaceViewModelCache.paperThickness,
+      spineWidth: this.workspaceViewModelCache.spineWidth,
+    });
+
     return this.workspaceViewModelCache;
   }
 
   get previewPages(): string[] {
     const ws = this.workspace;
     if (!ws) return [];
-    if (this.previewPagesCache.length && this.lastWorkspaceRef === ws && this.compositeCacheKey === this.compositeUrl) {
+    if (this.previewPagesCache.length &&
+        this.lastWorkspaceRef === ws &&
+        this.compositeCacheKey === this.compositeUrl &&
+        this.lastOutputSheetSize === ws.output_sheet_size) {
       return this.previewPagesCache;
     }
 
@@ -291,12 +341,14 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     if (ws.trim_size === "A4") {
       this.previewPagesCache = [vm.cover.url, spineUrl, backUrl];
       this.compositeCacheKey = this.compositeUrl;
+      this.lastOutputSheetSize = ws.output_sheet_size;
       return this.previewPagesCache;
     }
 
     const firstPage = this.compositeUrl || vm.cover.url;
     this.previewPagesCache = [firstPage, backUrl];
     this.compositeCacheKey = this.compositeUrl;
+    this.lastOutputSheetSize = ws.output_sheet_size;
     return this.previewPagesCache;
   }
 
@@ -315,6 +367,9 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     const spineUrl = ws.spine?.selected
       ? this.material.getAssetUrl(this.bookId, "spine", ws.spine.selected)
       : "";
+    const backUrl = ws.back?.selected
+      ? this.material.getAssetUrl(this.bookId, "back", ws.back.selected)
+      : "";
 
     if (!effectiveFrontUrl) {
       this.compositeUrl = "";
@@ -323,7 +378,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       return;
     }
 
-    const cacheKey = `${effectiveFrontUrl}|${spineUrl}|${ws.spine_width_mm}`;
+    const cacheKey = `${effectiveFrontUrl}|${spineUrl}|${backUrl}|${ws.spine_width_mm}|${ws.output_sheet_size}`;
     if (this.compositeCache.has(cacheKey)) {
       this.compositeUrl = this.compositeCache.get(cacheKey)!;
       this.compositeCacheKey = this.compositeUrl;
@@ -331,23 +386,18 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       return;
     }
 
-    const pageW = this.preview.getPageWidth(ws);
-    const pageH = this.preview.getPageHeight(ws);
+    const trimW = this.preview.getPageWidth(ws);
+    const trimH = this.preview.getPageHeight(ws);
+    const sheetW = this.preview.getSheetWidth(ws);
+    const sheetH = this.preview.getSheetHeight(ws);
     const spineW = ws.spine_width_mm ?? 0;
 
     const CANVAS_H = 400;
-    const scale = CANVAS_H / pageH;
-    const coverPx = Math.round(pageW * scale);
+    const scale = CANVAS_H / sheetH;
+    const sheetPx = Math.round(sheetW * scale);
+    const trimPx = Math.round(trimW * scale);
     const spinePx = spineUrl ? Math.max(Math.round(spineW * scale), 2) : 0;
-    const totalW = coverPx + spinePx;
-
-    const canvas = document.createElement("canvas");
-    canvas.width = totalW;
-    canvas.height = CANVAS_H;
-    const ctx = canvas.getContext("2d")!;
-
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, totalW, CANVAS_H);
+    const trimHPx = Math.round(trimH * scale);
 
     const loadImage = (url: string): Promise<HTMLImageElement> =>
       new Promise((resolve, reject) => {
@@ -361,22 +411,55 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     const promises: Promise<HTMLImageElement | null>[] = [
       loadImage(effectiveFrontUrl),
       spineUrl ? loadImage(spineUrl).catch(() => null) : Promise.resolve(null),
+      backUrl ? loadImage(backUrl).catch(() => null) : Promise.resolve(null),
     ];
 
     Promise.all(promises)
-      .then(([coverImg, spineImg]) => {
+      .then(([coverImg, spineImg, backImg]) => {
         if (renderToken !== this.compositeRenderToken || !coverImg) return;
+
+        // 第1页：输出纸张画布，居中放置封面+书脊
+        const canvas1 = document.createElement("canvas");
+        canvas1.width = sheetPx;
+        canvas1.height = CANVAS_H;
+        const ctx1 = canvas1.getContext("2d")!;
+        ctx1.fillStyle = "#ffffff";
+        ctx1.fillRect(0, 0, sheetPx, CANVAS_H);
+
+        const contentW1 = trimPx + spinePx;
+        const xOffset1 = (sheetPx - contentW1) / 2;
+        const yOffset1 = (CANVAS_H - trimHPx) / 2;
+
         if (spineImg && spinePx > 0) {
-          ctx.drawImage(spineImg, 0, 0, spinePx, CANVAS_H);
-          ctx.drawImage(coverImg, spinePx, 0, coverPx, CANVAS_H);
+          ctx1.drawImage(spineImg, xOffset1, yOffset1, spinePx, trimHPx);
+          ctx1.drawImage(coverImg, xOffset1 + spinePx, yOffset1, trimPx, trimHPx);
         } else {
-          ctx.drawImage(coverImg, 0, 0, coverPx, CANVAS_H);
+          ctx1.drawImage(coverImg, xOffset1, yOffset1, trimPx, trimHPx);
         }
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
-        this.compositeCache.set(cacheKey, dataUrl);
-        this.compositeUrl = dataUrl;
+
+        const page1Url = canvas1.toDataURL("image/jpeg", 0.92);
+
+        // 第2页：输出纸张画布，居中放置封底
+        let page2Url = "";
+        if (backImg) {
+          const canvas2 = document.createElement("canvas");
+          canvas2.width = sheetPx;
+          canvas2.height = CANVAS_H;
+          const ctx2 = canvas2.getContext("2d")!;
+          ctx2.fillStyle = "#ffffff";
+          ctx2.fillRect(0, 0, sheetPx, CANVAS_H);
+
+          const xOffset2 = (sheetPx - trimPx) / 2;
+          const yOffset2 = (CANVAS_H - trimHPx) / 2;
+          ctx2.drawImage(backImg, xOffset2, yOffset2, trimPx, trimHPx);
+
+          page2Url = canvas2.toDataURL("image/jpeg", 0.92);
+        }
+
+        this.compositeCache.set(cacheKey, page1Url);
+        this.compositeUrl = page1Url;
         this.compositeCacheKey = this.compositeUrl;
-        this.previewPagesCache = [];
+        this.previewPagesCache = [page1Url, page2Url].filter(Boolean);
       })
       .catch(() => {
         if (renderToken !== this.compositeRenderToken) return;
@@ -387,16 +470,72 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   }
 
   setTrim(size: TrimSize) {
-    this.workspaceState.setTrim(size);
-    this.workspaceState.recalcSpine();
-    this.workspaceState.clearPdfPath();
+    const currentOutputSheet = this.workspace?.output_sheet_size ?? 'A4';
+
+    this.workspaceState.batchUpdate((ws) => {
+      const nextOutputSheet = this.isTrimAndOutputSheetCombinationValid(size, currentOutputSheet)
+        ? currentOutputSheet
+        : this.getDefaultOutputSheetSizeForTrim(size);
+      const pageCount = ws.page_count ?? 0;
+      const paperThickness = ws.paper_thickness ?? 0;
+
+      return {
+        ...ws,
+        trim_size: size,
+        output_sheet_size: nextOutputSheet,
+        spine_width_mm: calcSpineWidth(pageCount, paperThickness),
+        pdf_path: null,
+        preview_path: null,
+      };
+    });
+
     this.refreshComposite();
     this.saveParams();
+  }
+
+  setOutputSheetSize(size: TrimSize) {
+    if (!this.isOutputSheetSizeValid(size)) {
+      const trimSize = this.workspace?.trim_size ?? 'A4';
+      alert(`无效组合：${trimSize} 成书尺寸不支持 ${size} 输出纸张`);
+      return;
+    }
+    this.workspaceState.batchUpdate((ws) => ({
+      ...ws,
+      output_sheet_size: size,
+      pdf_path: null,
+      preview_path: null,
+    }));
+    this.refreshComposite();
+    this.saveParams();
+  }
+
+  isOutputSheetSizeValid(size: TrimSize): boolean {
+    if (!this.workspace) return false;
+    return this.isTrimAndOutputSheetCombinationValid(this.workspace.trim_size, size);
+  }
+
+  private isTrimAndOutputSheetCombinationValid(trimSize: TrimSize, outputSheetSize: TrimSize): boolean {
+    const validMap: Record<TrimSize, TrimSize[]> = {
+      A4: ['A4'],
+      A5: ['A4', 'A5'],
+      B5: ['A4', 'B5'],
+    };
+    const validSizes = validMap[trimSize];
+    if (!validSizes) {
+      console.warn('[isTrimAndOutputSheetCombinationValid] 未知的 trimSize:', trimSize);
+      return false;
+    }
+    return validSizes.includes(outputSheetSize);
+  }
+
+  private getDefaultOutputSheetSizeForTrim(trimSize: TrimSize): TrimSize {
+    return trimSize === 'A4' ? 'A4' : 'A4';
   }
 
   recalculateSpine() {
     this.workspaceState.recalcSpine();
     this.workspaceState.clearPdfPath();
+    this.workspaceState.clearPreviewPath();
     this.saveParams();
     this.compositeCache.clear();
     this.refreshComposite();
@@ -407,6 +546,11 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     return this.preview.getPageHeight(this.workspace);
   }
 
+  getPreviewPageHeight(): number {
+    if (!this.workspace) return 0;
+    return this.preview.getSheetHeight(this.workspace);
+  }
+
   getPageRatio(): string {
     if (!this.workspace) return "1/1";
     return this.preview.getPageRatio(this.workspace);
@@ -415,7 +559,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   getPreviewPageRatio(index: number): string {
     if (!this.workspace) return "1/1";
     const w = this.preview.getPreviewPageWidth(this.workspace, index);
-    const h = this.preview.getPageHeight(this.workspace);
+    const h = this.preview.getSheetHeight(this.workspace);
     return `${w}/${h}`;
   }
 
@@ -435,35 +579,57 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     this.lightboxUrl = "";
   }
 
-  /** 素材删除/上传/选择后统一收口 workspace 更新，并清除旧 PDF 标记。 */
+  /** 素材删除/上传/选择后统一收口 workspace 更新，并清除旧 PDF 和预览标记。 */
   onMaterialChanged(ws: WorkspaceState) {
     if (!ws) return;
     this.workspaceState.setWorkspace(ws);
     this.workspaceState.clearPdfPath();
+    this.workspaceState.clearPreviewPath();
   }
 
   private updateWorkspaceParams(
     updater: (ws: WorkspaceState) => WorkspaceState,
   ): void {
     this.workspaceState.batchUpdate((ws) => {
+      console.log('[updateWorkspaceParams] 更新前:', {
+        page_count: ws.page_count,
+        paper_thickness: ws.paper_thickness,
+        spine_width_mm: ws.spine_width_mm,
+      });
+
       const next = updater(ws);
       const pageCount = next.page_count ?? 0;
       const paperThickness = next.paper_thickness ?? 0;
       const spineWidth = calcSpineWidth(pageCount, paperThickness);
       const pdfPath = next.pdf_path == null ? next.pdf_path : null;
 
+      console.log('[updateWorkspaceParams] updater 返回:', {
+        page_count: next.page_count,
+        paper_thickness: next.paper_thickness,
+        spine_width_mm: next.spine_width_mm,
+      });
+
       if (
         next.spine_width_mm === spineWidth &&
         next.pdf_path === pdfPath
       ) {
+        console.log('[updateWorkspaceParams] 无需二次修正，直接返回 next');
         return next;
       }
 
-      return {
+      const updated = {
         ...next,
         spine_width_mm: spineWidth,
         pdf_path: pdfPath,
       };
+
+      console.log('[updateWorkspaceParams] 最终写回:', {
+        page_count: updated.page_count,
+        paper_thickness: updated.paper_thickness,
+        spine_width_mm: updated.spine_width_mm,
+      });
+
+      return updated;
     });
     this.compositeCache.clear();
     this.refreshComposite();
@@ -471,6 +637,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   }
 
   onPageCountChange(value: number) {
+    console.log('[onPageCountChange] 输入值:', value, '类型:', typeof value);
     this.updateWorkspaceParams((ws) => ({
       ...ws,
       page_count: value,
@@ -478,6 +645,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   }
 
   onPaperThicknessChange(value: number) {
+    console.log('[onPaperThicknessChange] 输入值:', value, '类型:', typeof value);
     this.updateWorkspaceParams((ws) => ({
       ...ws,
       paper_thickness: value,
@@ -533,6 +701,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
 
     const request: PrintRequest = {
       trimSize: ws.trim_size,
+      outputSheetSize: ws.output_sheet_size ?? 'A4',
       pageCount: ws.page_count,
       paperThickness: ws.paper_thickness,
     };
@@ -800,17 +969,43 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     if (!ws) return;
     const request: PrintRequest = {
       trimSize: ws.trim_size,
+      outputSheetSize: ws.output_sheet_size ?? 'A4',
       pageCount: ws.page_count,
       paperThickness: ws.paper_thickness,
     };
     return this.print.generatePdf(this.bookId, request);
   }
 
-  /**
-   * 持久化当前成书参数到后端（暂不实现，print.service 无对应接口）
-   */
   private saveParams(): void {
-    // TODO: 待 print.service 新增 saveWorkspaceParams 接口后实现
+    this.saveParamsSubject.next();
+  }
+
+  private executeSaveParams() {
+    const ws = this.workspace;
+    if (!ws) {
+      throw new Error('workspace 不存在');
+    }
+
+    // 确保所有必填字段都有有效值
+    const pageCount = ws.page_count ?? 0;
+    const paperThickness = ws.paper_thickness ?? 0.06;
+    const spineWidthMm = ws.spine_width_mm ?? 0;
+
+    console.log('[executeSaveParams] 发送参数:', {
+      trimSize: ws.trim_size,
+      outputSheetSize: ws.output_sheet_size ?? 'A4',
+      pageCount,
+      paperThickness,
+      spineWidthMm,
+    });
+
+    return this.print.saveWorkspaceParams(this.bookId, {
+      trimSize: ws.trim_size,
+      outputSheetSize: ws.output_sheet_size ?? 'A4',
+      pageCount,
+      paperThickness,
+      spineWidthMm,
+    });
   }
 
   /**
@@ -1537,6 +1732,68 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     } catch (e) {
       console.warn('恢复日志失败:', e);
     }
+  }
+
+  /**
+   * 判断 workspace 更新时是否需要清除缓存
+   *
+   * 策略：
+   * - 素材变更（cover/spine/back/front_output 的 selected 或 history 变化）→ 需要清除缓存
+   * - 仅参数变更（trim_size/output_sheet_size/page_count 等）→ 不需要清除缓存
+   *
+   * 原因：参数变更时，前端已经立即更新本地状态并刷新了 UI，
+   * 后端响应只是确认，不应该再次清除缓存导致 UI 闪烁。
+   */
+  private shouldClearCacheOnWorkspaceUpdate(newWs: WorkspaceState): boolean {
+    const oldWs = this.lastWorkspaceRef;
+    if (!oldWs) {
+      console.log('[shouldClearCache] 首次加载，需要清除缓存');
+      return true; // 首次加载，需要清除缓存
+    }
+
+    // 辅助函数：比较两个数组是否相等
+    const arraysEqual = (a: any[] | undefined, b: any[] | undefined): boolean => {
+      if (!a && !b) return true;
+      if (!a || !b) return false;
+      if (a.length !== b.length) return false;
+      return JSON.stringify(a) === JSON.stringify(b);
+    };
+
+    // 检查素材是否变更
+    const coverChanged =
+      oldWs.cover?.selected !== newWs.cover?.selected ||
+      !arraysEqual(oldWs.cover?.history, newWs.cover?.history);
+
+    const spineChanged =
+      oldWs.spine?.selected !== newWs.spine?.selected ||
+      !arraysEqual(oldWs.spine?.history, newWs.spine?.history);
+
+    const backChanged =
+      oldWs.back?.selected !== newWs.back?.selected ||
+      !arraysEqual(oldWs.back?.history, newWs.back?.history);
+
+    const frontOutputChanged =
+      oldWs.front_output?.selected !== newWs.front_output?.selected ||
+      !arraysEqual(oldWs.front_output?.history, newWs.front_output?.history);
+
+    const bookNameChanged = oldWs.book_name !== newWs.book_name;
+
+    console.log('[shouldClearCache] 变更检测:', {
+      coverChanged,
+      spineChanged,
+      backChanged,
+      frontOutputChanged,
+      bookNameChanged,
+      oldTrimSize: oldWs.trim_size,
+      newTrimSize: newWs.trim_size,
+      oldOutputSheet: oldWs.output_sheet_size,
+      newOutputSheet: newWs.output_sheet_size,
+      oldCoverSelected: oldWs.cover?.selected,
+      newCoverSelected: newWs.cover?.selected,
+    });
+
+    // 只有素材或书名变更时才需要清除缓存
+    return coverChanged || spineChanged || backChanged || frontOutputChanged || bookNameChanged;
   }
 
   /**

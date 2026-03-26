@@ -617,6 +617,17 @@ Booklore Print Workspace
     border-color: #2f6feb;
     color: white;
   }
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    background: #0a1420;
+    border-color: #1a2535;
+    color: #4a5568;
+  }
+  &:hover:not(:disabled):not(.active) {
+    background: #152a45;
+    border-color: #3a4f6f;
+  }
 }
 
 /* =========================================================

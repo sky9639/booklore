@@ -120,7 +120,7 @@
       <div class="param-book">{{ vm.bookName }}</div>
     </div>
     <div class="param-group">
-      <label>尺寸</label>
+      <label>图像打印尺寸</label>
       <div class="trim-selector">
         <button
           class="trim-btn"
@@ -140,6 +140,35 @@
           class="trim-btn"
           [class.active]="vm.trimSize === 'B5'"
           (click)="setTrim('B5')"
+        >
+          B5
+        </button>
+      </div>
+    </div>
+    <div class="param-group">
+      <label>输出纸张尺寸</label>
+      <div class="trim-selector">
+        <button
+          class="trim-btn"
+          [class.active]="vm.outputSheetSize === 'A4'"
+          [disabled]="!isOutputSheetSizeValid('A4')"
+          (click)="setOutputSheetSize('A4')"
+        >
+          A4
+        </button>
+        <button
+          class="trim-btn"
+          [class.active]="vm.outputSheetSize === 'A5'"
+          [disabled]="!isOutputSheetSizeValid('A5')"
+          (click)="setOutputSheetSize('A5')"
+        >
+          A5
+        </button>
+        <button
+          class="trim-btn"
+          [class.active]="vm.outputSheetSize === 'B5'"
+          [disabled]="!isOutputSheetSizeValid('B5')"
+          (click)="setOutputSheetSize('B5')"
         >
           B5
         </button>
@@ -444,7 +473,7 @@
             <!-- [问题2+3] 左侧垂直标尺，纯 CSS 实现 -->
             <div class="ruler-v">
               <div class="ruler-v-inner">
-                <span class="ruler-val-v">{{ getPageHeight() }} mm</span>
+                <span class="ruler-val-v">{{ getPreviewPageHeight() }} mm</span>
               </div>
             </div>
 

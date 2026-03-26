@@ -86,6 +86,19 @@ public class PrintEngineClient {
         }
     }
 
+    public Map saveWorkspaceParams(Map requestBody) {
+        try {
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                BASE_URL + "/workspace/params",
+                requestBody,
+                Map.class
+            );
+            return response.getBody();
+        } catch (Exception e) {
+            return Map.of("status", "error", "message", e.getMessage());
+        }
+    }
+
     public Map uploadMaterial(
         String category,
         Map<String, Object> payload,

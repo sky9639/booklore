@@ -45,6 +45,13 @@ export class WorkspaceStateService {
    * 以确保订阅者能感知到变更。
    */
   setWorkspace(ws: WorkspaceState): void {
+    console.log('[WorkspaceStateService.setWorkspace] 接收到新 workspace:', {
+      page_count: ws.page_count,
+      paper_thickness: ws.paper_thickness,
+      spine_width_mm: ws.spine_width_mm,
+      trim_size: ws.trim_size,
+      output_sheet_size: ws.output_sheet_size,
+    });
     this._workspace$.next(ws);
   }
 
@@ -57,6 +64,15 @@ export class WorkspaceStateService {
     this.updateWorkspace((ws) => ({
       ...ws,
       trim_size: size,
+    }));
+  }
+
+  setOutputSheetSize(size: TrimSize): void {
+    this.updateWorkspace((ws) => ({
+      ...ws,
+      output_sheet_size: size,
+      preview_path: null,
+      pdf_path: null,
     }));
   }
 
@@ -104,6 +120,16 @@ export class WorkspaceStateService {
     });
   }
 
+  clearPreviewPath(): void {
+    this.updateWorkspace((ws) => {
+      if (ws.preview_path == null) return ws;
+      return {
+        ...ws,
+        preview_path: null,
+      };
+    });
+  }
+
   /**
    * 重新计算书脊宽度并发布状态
    *
@@ -123,11 +149,21 @@ export class WorkspaceStateService {
   }
 
   /**
-   * 批量更新 workspace 字段，只发布一次状态
+   * 批量更新 workspace 字段,只发布一次状态
    *
    * 用于避免连续多次 set 操作触发多次订阅刷新
    */
   batchUpdate(updater: (ws: WorkspaceState) => WorkspaceState): void {
+    console.log('[WorkspaceStateService.batchUpdate] 批量更新前:', {
+      page_count: this.workspace?.page_count,
+      paper_thickness: this.workspace?.paper_thickness,
+      spine_width_mm: this.workspace?.spine_width_mm,
+    });
     this.updateWorkspace(updater);
+    console.log('[WorkspaceStateService.batchUpdate] 批量更新后:', {
+      page_count: this.workspace?.page_count,
+      paper_thickness: this.workspace?.paper_thickness,
+      spine_width_mm: this.workspace?.spine_width_mm,
+    });
   }
 }

@@ -29,21 +29,26 @@ export function applyModifier(value: string, modifier: string, fieldName: string
   }
 }
 
-function resolveModifierPlaceholders(block: string, values: Record<string, string>): string {
-  return block.replace(MODIFIER_PLACEHOLDER_REGEX, (_, fieldName: string, modifier?: string) => {
+function resolveModifierPlaceholders(block: string, values: {[key: string]: string}): string {
+  return block.replace(MODIFIER_PLACEHOLDER_REGEX, (_match: string, fieldName: string, modifier?: string) => {
     const val = values[fieldName] ?? '';
     return modifier ? applyModifier(val, modifier, fieldName) : val;
   });
 }
 
-function checkAllPlaceholdersPresent(block: string, values: Record<string, string>): boolean {
-  const matches = [...block.matchAll(MODIFIER_PLACEHOLDER_REGEX)];
-  return matches.every(m => values[m[1]]?.trim());
+function checkAllPlaceholdersPresent(block: string, values: {[key: string]: string}): boolean {
+  const matches: RegExpMatchArray[] = [];
+  let match: RegExpExecArray | null;
+  const regex = new RegExp(MODIFIER_PLACEHOLDER_REGEX.source, MODIFIER_PLACEHOLDER_REGEX.flags);
+  while ((match = regex.exec(block)) !== null) {
+    matches.push(match);
+  }
+  return matches.every((m: RegExpMatchArray) => values[m[1]]?.trim());
 }
 
-export function replacePlaceholders(pattern: string, values: Record<string, string>): string {
+export function replacePlaceholders(pattern: string, values: {[key: string]: string}): string {
   // Handle optional blocks with else clause: <primary|fallback>
-  pattern = pattern.replace(/<([^<>]+)>/g, (_, blockContent: string) => {
+  pattern = pattern.replace(/<([^<>]+)>/g, (_match: string, blockContent: string) => {
     const pipeIndex = blockContent.indexOf('|');
     const primary = pipeIndex >= 0 ? blockContent.substring(0, pipeIndex) : blockContent;
     const fallback = pipeIndex >= 0 ? blockContent.substring(pipeIndex + 1) : null;

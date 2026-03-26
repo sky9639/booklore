@@ -68,6 +68,14 @@ export class PreviewEngineService {
     return getTrimHeight(ws.trim_size);
   }
 
+  getSheetWidth(ws: PrintWorkspace): number {
+    return getTrimWidth(ws.output_sheet_size ?? "A4");
+  }
+
+  getSheetHeight(ws: PrintWorkspace): number {
+    return getTrimHeight(ws.output_sheet_size ?? "A4");
+  }
+
   /**
    * 获取拼版预览页面宽度
    *
@@ -91,38 +99,18 @@ export class PreviewEngineService {
    * 拼版预览比例会完全错误
    */
   getPreviewPageWidth(ws: PrintWorkspace, pageIndex: number): number {
-    const base = this.getPageWidth(ws);
-
+    const trimWidth = this.getPageWidth(ws);
+    const sheetWidth = this.getSheetWidth(ws);
     const spine = ws.spine_width_mm ?? 0;
 
-    /**
-     * A4 拼版模式
-     *
-     * 页面结构：
-     *
-     * [封面] [书脊] [封底]
-     */
     if (ws.trim_size === "A4") {
       if (pageIndex === 1) {
         return Math.max(spine, 1);
       }
-
-      return base;
+      return trimWidth;
     }
 
-    /**
-     * A5 / B5 拼版模式
-     *
-     * 页面结构：
-     *
-     * Page1 = 封面 + 书脊
-     * Page2 = 封底
-     */
-    if (pageIndex === 0) {
-      return base + spine;
-    }
-
-    return base;
+    return sheetWidth;
   }
 
   /**
@@ -141,10 +129,8 @@ export class PreviewEngineService {
    * preview 页面会变形
    */
   getPageRatio(ws: PrintWorkspace): string {
-    const w = this.getPageWidth(ws);
-
-    const h = this.getPageHeight(ws);
-
+    const w = this.getSheetWidth(ws);
+    const h = this.getSheetHeight(ws);
     return `${w}/${h}`;
   }
 }

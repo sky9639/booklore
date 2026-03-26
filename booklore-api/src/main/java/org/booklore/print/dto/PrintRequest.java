@@ -19,11 +19,13 @@ public class PrintRequest {
     /**
      * 纸张厚度（mm）
      */
+    @JsonProperty("paper_thickness")
     private Double paperThickness = 0.06;
 
     /**
      * 页数（可选，null则自动读取PDF）
      */
+    @JsonProperty("page_count")
     private Integer pageCount;
 
     /**
@@ -32,6 +34,13 @@ public class PrintRequest {
      */
     @JsonProperty("trim_size")
     private String trimSize;
+
+    /**
+     * 输出纸张尺寸：A4 / A5 / B5
+     * 前端发送 snake_case（output_sheet_size），用 @JsonProperty 映射
+     */
+    @JsonProperty("output_sheet_size")
+    private String outputSheetSize;
 
     /**
      * 前端当前书脊宽度（mm）

@@ -17,6 +17,7 @@ export type { AiCropDraft, AiCropHistoryItem };
 
 export interface PrintRequest {
   trimSize?: string;
+  outputSheetSize?: string;
   pageCount?: number;
   paperThickness?: number;
   spineMode?: string;
@@ -111,17 +112,49 @@ export class PrintService {
     );
   }
 
+  /** 保存工作区参数 */
+  saveWorkspaceParams(bookId: number | string, request: PrintRequest & { spineWidthMm?: number }): Observable<WorkspaceState> {
+    const payload = {
+      trim_size: request.trimSize,
+      output_sheet_size: request.outputSheetSize,
+      page_count: request.pageCount,
+      paper_thickness: request.paperThickness,
+      spine_width_mm: request.spineWidthMm,
+    };
+
+    return this.http.post<WorkspaceState>(
+      `${this.baseUrl}/print/${bookId}/workspace/params`,
+      payload,
+    );
+  }
+
   /** 生成拼版预览 */
   preview(bookId: number | string, request: PrintRequest): Observable<any> {
+    const payload = {
+      trim_size: request.trimSize,
+      output_sheet_size: request.outputSheetSize,
+      page_count: request.pageCount,
+      paper_thickness: request.paperThickness,
+      spine_mode: request.spineMode,
+      back_mode: request.backMode,
+    };
     return this.http.post<any>(
       `${this.baseUrl}/print/${bookId}/preview`,
-      request,
+      payload,
     );
   }
 
   /** 生成印刷 PDF */
   generatePdf(bookId: number | string, request: PrintRequest): Observable<any> {
-    return this.http.post<any>(`${this.baseUrl}/print/${bookId}/pdf`, request);
+    const payload = {
+      trim_size: request.trimSize,
+      output_sheet_size: request.outputSheetSize,
+      page_count: request.pageCount,
+      paper_thickness: request.paperThickness,
+      spine_mode: request.spineMode,
+      back_mode: request.backMode,
+    };
+    return this.http.post<any>(`${this.baseUrl}/print/${bookId}/pdf`, payload);
   }
 
   /**
