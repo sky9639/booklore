@@ -136,6 +136,8 @@ public class PrintController {
         payload.put("spine_mode", request.getSpineMode());
         payload.put("back_mode", request.getBackMode());
         payload.put("book_id", book.getId());
+        payload.put("trim_size", request.getTrimSize() != null ? request.getTrimSize() : "A5");
+        payload.put("output_sheet_size", request.getOutputSheetSize() != null ? request.getOutputSheetSize() : "A4");
         payload.putAll(extractBookMeta(book));
 
         Map<String, Object> result = client.preview(payload);
@@ -174,6 +176,10 @@ public class PrintController {
         payload.put(
             "trim_size",
             request.getTrimSize() != null ? request.getTrimSize() : "A5"
+        );
+        payload.put(
+            "output_sheet_size",
+            request.getOutputSheetSize() != null ? request.getOutputSheetSize() : "A4"
         );
         payload.putAll(extractBookMeta(book));
 
@@ -226,47 +232,21 @@ public class PrintController {
             Path fullPath = book.getFullFilePath();
             if (fullPath == null) return ResponseEntity.notFound().build();
 
-            // 从 workspace.json 读取实际的 PDF 文件名
-            Path printDir = fullPath.getParent().resolve(".print");
-            Path workspaceFile = printDir.resolve("workspace.json");
-
-            File file = null;
-            String filename = "layout_print.pdf";
-
-            if (workspaceFile.toFile().exists()) {
-                try {
-                    String json = Files.readString(workspaceFile);
-                    com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                    com.fasterxml.jackson.databind.JsonNode ws = mapper.readTree(json);
-                    String pdfPath = ws.has("pdf_path") ? ws.get("pdf_path").asText() : null;
-
-                    if (pdfPath != null && !pdfPath.isEmpty()) {
-                        file = new File(pdfPath);
-                        filename = file.getName();
-                    }
-                } catch (Exception e) {
-                    // 读取失败，使用默认文件名
-                }
+            PdfFileInfo pdfInfo = resolvePdfPath(fullPath);
+            if (pdfInfo.file == null || !pdfInfo.file.exists()) {
+                return ResponseEntity.notFound().build();
             }
-
-            // 如果没有从 workspace 读取到，使用默认路径
-            if (file == null || !file.exists()) {
-                file = printDir.resolve("layout_print.pdf").toFile();
-                filename = "layout_print.pdf";
-            }
-
-            if (!file.exists()) return ResponseEntity.notFound().build();
 
             InputStreamResource resource = new InputStreamResource(
-                new FileInputStream(file)
+                new FileInputStream(pdfInfo.file)
             );
             return ResponseEntity.ok()
                 .header(
                     HttpHeaders.CONTENT_DISPOSITION,
-                    "inline; filename=" + filename
+                    "inline; filename=" + pdfInfo.filename
                 )
                 .header(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .contentLength(file.length())
+                .contentLength(pdfInfo.file.length())
                 .contentType(MediaType.APPLICATION_PDF)
                 .body(resource);
         } catch (Exception e) {
@@ -292,46 +272,20 @@ public class PrintController {
             Path fullPath = book.getFullFilePath();
             if (fullPath == null) return ResponseEntity.notFound().build();
 
-            // 从 workspace.json 读取实际的 PDF 文件名
-            Path printDir = fullPath.getParent().resolve(".print");
-            Path workspaceFile = printDir.resolve("workspace.json");
-
-            File file = null;
-            String filename = "layout_print.pdf";
-
-            if (workspaceFile.toFile().exists()) {
-                try {
-                    String json = Files.readString(workspaceFile);
-                    com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                    com.fasterxml.jackson.databind.JsonNode ws = mapper.readTree(json);
-                    String pdfPath = ws.has("pdf_path") ? ws.get("pdf_path").asText() : null;
-
-                    if (pdfPath != null && !pdfPath.isEmpty()) {
-                        file = new File(pdfPath);
-                        filename = file.getName();
-                    }
-                } catch (Exception e) {
-                    // 读取失败，使用默认文件名
-                }
+            PdfFileInfo pdfInfo = resolvePdfPath(fullPath);
+            if (pdfInfo.file == null || !pdfInfo.file.exists()) {
+                return ResponseEntity.notFound().build();
             }
-
-            // 如果没有从 workspace 读取到，使用默认路径
-            if (file == null || !file.exists()) {
-                file = printDir.resolve("layout_print.pdf").toFile();
-                filename = "layout_print.pdf";
-            }
-
-            if (!file.exists()) return ResponseEntity.notFound().build();
 
             InputStreamResource resource = new InputStreamResource(
-                new FileInputStream(file)
+                new FileInputStream(pdfInfo.file)
             );
             return ResponseEntity.ok()
                 .header(
                     HttpHeaders.CONTENT_DISPOSITION,
-                    "attachment; filename=\"" + filename + "\""
+                    "attachment; filename=\"" + pdfInfo.filename + "\""
                 )
-                .contentLength(file.length())
+                .contentLength(pdfInfo.file.length())
                 .contentType(MediaType.APPLICATION_PDF)
                 .body(resource);
         } catch (Exception e) {
@@ -461,6 +415,40 @@ public class PrintController {
             payload.put("filename", filename);
             Map<String, Object> workspace = client.selectMaterial(payload);
             return ResponseEntity.ok(workspace);
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(
+                Map.of("error", e.getMessage())
+            );
+        }
+    }
+
+    @PostMapping("/{bookId}/workspace/params")
+    public ResponseEntity<?> saveWorkspaceParams(
+        @PathVariable Long bookId,
+        @RequestBody PrintRequest request
+    ) {
+        try {
+            BookEntity book = bookRepository
+                .findById(bookId)
+                .orElseThrow(() -> new RuntimeException("Book not found"));
+
+            Path fullPath = book.getFullFilePath();
+            if (fullPath == null) {
+                return ResponseEntity.badRequest().body(
+                    Map.of("error", "Book file path could not be resolved")
+                );
+            }
+
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("book_path", fullPath.toString());
+            payload.put("trim_size", request.getTrimSize() != null ? request.getTrimSize() : "A5");
+            payload.put("output_sheet_size", request.getOutputSheetSize() != null ? request.getOutputSheetSize() : "A4");
+            payload.put("page_count", request.getPageCount() != null ? request.getPageCount() : 0);
+            payload.put("paper_thickness", request.getPaperThickness() != null ? request.getPaperThickness() : 0.06);
+            payload.put("spine_width_mm", request.getSpineWidthMm() != null ? request.getSpineWidthMm() : 0.0);
+
+            Map<String, Object> result = client.saveWorkspaceParams(payload);
+            return ResponseEntity.ok(result);
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(
                 Map.of("error", e.getMessage())
@@ -649,6 +637,43 @@ public class PrintController {
     // ============================================================
     // 私有工具方法
     // ============================================================
+
+    private record PdfFileInfo(File file, String filename) {}
+
+    /**
+     * 从 workspace.json 读取 PDF 路径，如果不存在则使用默认路径
+     */
+    private PdfFileInfo resolvePdfPath(Path fullPath) {
+        Path printDir = fullPath.getParent().resolve(".print");
+        Path workspaceFile = printDir.resolve("workspace.json");
+
+        File file = null;
+        String filename = "layout_print.pdf";
+
+        if (workspaceFile.toFile().exists()) {
+            try {
+                String json = Files.readString(workspaceFile);
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                com.fasterxml.jackson.databind.JsonNode ws = mapper.readTree(json);
+                String pdfPath = ws.has("pdf_path") ? ws.get("pdf_path").asText() : null;
+
+                if (pdfPath != null && !pdfPath.isEmpty()) {
+                    file = new File(pdfPath);
+                    filename = file.getName();
+                }
+            } catch (Exception e) {
+                // 读取失败，使用默认文件名
+            }
+        }
+
+        // 如果没有从 workspace 读取到，使用默认路径
+        if (file == null || !file.exists()) {
+            file = printDir.resolve("layout_print.pdf").toFile();
+            filename = "layout_print.pdf";
+        }
+
+        return new PdfFileInfo(file, filename);
+    }
 
     /**
      * ============================================================
@@ -853,9 +878,12 @@ public class PrintController {
 
     /**
      * ===============================
-     * 获取PDF信息（尺寸、页数等）
+     * 获取原书PDF信息（尺寸、页数等）
      * ===============================
      * POST /api/v1/print/{bookId}/pdf/info
+     *
+     * 用途：用于PDF格式化前检查原书尺寸
+     * 注意：始终返回原书PDF信息，不返回印刷PDF信息
      */
     @PostMapping("/{bookId}/pdf/info")
     public ResponseEntity<?> getPdfInfo(@PathVariable Long bookId) {

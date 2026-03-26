@@ -68,7 +68,9 @@ def generate_layout(
     spine_width_mm,
     trim_width_mm,
     trim_height_mm,
-    book_name=None
+    book_name=None,
+    sheet_width_mm=None,
+    sheet_height_mm=None
 ):
     # 生成文件名：使用书名或默认名称
     if book_name:
@@ -82,7 +84,14 @@ def generate_layout(
         filename = "layout_print.pdf"
 
     output_pdf = os.path.join(print_root, filename)
-    c = canvas.Canvas(output_pdf)
+
+    # 如果未指定输出纸张尺寸，则默认与图像尺寸相同（向后兼容）
+    if sheet_width_mm is None:
+        sheet_width_mm = trim_width_mm
+    if sheet_height_mm is None:
+        sheet_height_mm = trim_height_mm
+
+    c = canvas.Canvas(output_pdf, pagesize=(sheet_width_mm * mm, sheet_height_mm * mm))
 
     front_path = os.path.join(print_root, front_category, front_filename)
     spine_path = os.path.join(print_root, "spine", spine_filename)
@@ -96,25 +105,41 @@ def generate_layout(
     if not os.path.exists(back_path):
         raise FileNotFoundError(f"Back file not found: {back_filename}")
 
-    # A5 / B5 → 2页
-    if trim_width_mm in [148, 176]:
+    # 判断是否需要 2页布局：当 trim 尺寸小于 output sheet 尺寸时
+    # 这样可以支持未来新增的尺寸规格，不依赖硬编码的 mm 值
+    needs_two_page_layout = (trim_width_mm < sheet_width_mm or trim_height_mm < sheet_height_mm)
+
+    if needs_two_page_layout:
 
         spread_width_mm = trim_width_mm + spine_width_mm
-        c.setPageSize((spread_width_mm * mm, trim_height_mm * mm))
 
-        c.drawImage(ImageReader(spine_path), 0, 0,
+        # 第1页：封面 + 书脊，居中放置在输出纸张上
+        c.setPageSize((sheet_width_mm * mm, sheet_height_mm * mm))
+
+        # 计算居中偏移
+        x_offset = (sheet_width_mm - spread_width_mm) / 2
+        y_offset = (sheet_height_mm - trim_height_mm) / 2
+
+        c.drawImage(ImageReader(spine_path),
+                    x_offset * mm, y_offset * mm,
                     width=spine_width_mm * mm,
                     height=trim_height_mm * mm)
 
         c.drawImage(ImageReader(front_path),
-                    spine_width_mm * mm, 0,
+                    (x_offset + spine_width_mm) * mm, y_offset * mm,
                     width=trim_width_mm * mm,
                     height=trim_height_mm * mm)
 
         c.showPage()
 
-        c.setPageSize((trim_width_mm * mm, trim_height_mm * mm))
-        c.drawImage(ImageReader(back_path), 0, 0,
+        # 第2页：封底，居中放置在输出纸张上
+        c.setPageSize((sheet_width_mm * mm, sheet_height_mm * mm))
+
+        x_offset = (sheet_width_mm - trim_width_mm) / 2
+        y_offset = (sheet_height_mm - trim_height_mm) / 2
+
+        c.drawImage(ImageReader(back_path),
+                    x_offset * mm, y_offset * mm,
                     width=trim_width_mm * mm,
                     height=trim_height_mm * mm)
 

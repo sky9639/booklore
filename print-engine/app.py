@@ -116,11 +116,13 @@ class PreviewRequest(BaseModel):
     book_page_count: int | None = None
     book_id: int | None = None
     trim_size: str = "A5"
+    output_sheet_size: str = "A4"
 
 
 class SaveParamsRequest(BaseModel):
     book_path: str
     trim_size: str
+    output_sheet_size: str = "A4"
     page_count: int
     paper_thickness: float
     spine_width_mm: float
@@ -199,6 +201,7 @@ def init_workspace(request: InitRequest):
     ws = {
         "book_name": request.book_title or "",
         "trim_size": "A5",
+        "output_sheet_size": "A4",
         "page_count": page_count,
         "paper_thickness": 0.06,
         "spine_width_mm": calculate_spine_width(page_count, 0.06),
@@ -332,13 +335,27 @@ def save_workspace_params(request: SaveParamsRequest):
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
+    # 校验非法组合：显式业务规则
+    valid_combinations = {
+        "A4": ["A4"],
+        "A5": ["A4", "A5"],
+        "B5": ["A4", "B5"],
+    }
+    if request.output_sheet_size not in valid_combinations.get(request.trim_size, []):
+        raise HTTPException(status_code=400, detail=f"Invalid size combination: {request.trim_size} trim cannot use {request.output_sheet_size} output sheet")
+
     ws["trim_size"] = request.trim_size
+    ws["output_sheet_size"] = request.output_sheet_size
     ws["page_count"] = request.page_count
     ws["paper_thickness"] = request.paper_thickness
-    ws["spine_width_mm"] = request.spine_width_mm
 
-    # 参数变化，旧 PDF 作废
+    # 后端根据 page_count 和 paper_thickness 重新计算 spine_width_mm
+    # 不直接使用前端传来的值，避免不一致
+    ws["spine_width_mm"] = calculate_spine_width(request.page_count, request.paper_thickness)
+
+    # 参数变化，旧 PDF 和预览作废
     ws["pdf_path"] = None
+    ws["preview_path"] = None
 
     ws = persist_workspace(request.book_path, ws, request)
     return ws
@@ -544,7 +561,22 @@ def preview(request: PreviewRequest):
     spine_width = calculate_spine_width(page_count, paper_thickness)
 
     trim_map = {"A5": (148, 210), "B5": (176, 250), "A4": (210, 297)}
-    trim_width_mm, trim_height_mm = trim_map[request.trim_size]
+
+    # 统一参数来源规则：优先使用请求参数，回退到 workspace 值
+    trim_size = request.trim_size or ws.get("trim_size", "A5")
+    trim_width_mm, trim_height_mm = trim_map[trim_size]
+
+    output_sheet_size = request.output_sheet_size or ws.get("output_sheet_size", "A4")
+    sheet_width_mm, sheet_height_mm = trim_map[output_sheet_size]
+
+    # 校验非法组合：显式业务规则
+    valid_combinations = {
+        "A4": ["A4"],
+        "A5": ["A4", "A5"],
+        "B5": ["A4", "B5"],
+    }
+    if output_sheet_size not in valid_combinations.get(request.trim_size, []):
+        raise HTTPException(status_code=400, detail=f"Invalid size combination: {request.trim_size} trim cannot use {output_sheet_size} output sheet")
 
     front_category, effective_front_filename = resolve_effective_front_asset(print_root, ws)
 
@@ -559,6 +591,8 @@ def preview(request: PreviewRequest):
         trim_height_mm,
     )
 
+    ws["trim_size"] = trim_size
+    ws["output_sheet_size"] = output_sheet_size
     ws["page_count"] = page_count
     ws["paper_thickness"] = paper_thickness
     ws["spine_width_mm"] = spine_width
@@ -587,6 +621,18 @@ def generate(request: PreviewRequest):
     trim_size = request.trim_size or ws.get("trim_size", "A5")
     trim_width_mm, trim_height_mm = trim_map[trim_size]
 
+    output_sheet_size = request.output_sheet_size or ws.get("output_sheet_size", "A4")
+    sheet_width_mm, sheet_height_mm = trim_map[output_sheet_size]
+
+    # 校验非法组合：显式业务规则
+    valid_combinations = {
+        "A4": ["A4"],
+        "A5": ["A4", "A5"],
+        "B5": ["A4", "B5"],
+    }
+    if output_sheet_size not in valid_combinations.get(request.trim_size, []):
+        raise HTTPException(status_code=400, detail=f"Invalid size combination: {request.trim_size} trim cannot use {output_sheet_size} output sheet")
+
     front_category, effective_front_filename = resolve_effective_front_asset(print_root, ws)
 
     pdf_filename = generate_layout(
@@ -599,11 +645,14 @@ def generate(request: PreviewRequest):
         trim_width_mm,
         trim_height_mm,
         ws.get("book_name", None),
+        sheet_width_mm,
+        sheet_height_mm,
     )
 
     abs_pdf_path = os.path.join(print_root, pdf_filename)
     ws["pdf_path"] = abs_pdf_path
     ws["trim_size"] = trim_size
+    ws["output_sheet_size"] = output_sheet_size
     ws["page_count"] = page_count
     ws["paper_thickness"] = paper_thickness
     ws["spine_width_mm"] = spine_width
