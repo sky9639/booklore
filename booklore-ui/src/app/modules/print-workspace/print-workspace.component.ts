@@ -348,7 +348,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     const firstPage = this.compositeUrl || vm.cover.url;
     this.previewPagesCache = [firstPage, backUrl];
     this.compositeCacheKey = this.compositeUrl;
-    this.lastOutputSheetSize = ws.output_sheet_size;
+    this.lastOutputSheetSize = ws.output_sheet_size ?? null;
     return this.previewPagesCache;
   }
 
