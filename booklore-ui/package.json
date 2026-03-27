@@ -4,7 +4,9 @@
   "scripts": {
     "ng": "ng",
     "start": "ng serve",
-    "build": "ng build",
+    "build": "ng build && node ./scripts/copy-pdf-viewer-assets.mjs",
+    "build:app": "ng build",
+    "copy:pdf-assets": "node ./scripts/copy-pdf-viewer-assets.mjs",
     "dev": "ng serve --open --watch --configuration development",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",

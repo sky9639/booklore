@@ -28,6 +28,7 @@ export class PdfReaderComponent implements OnInit, OnDestroy {
   constructor() {
     pdfDefaultOptions.rangeChunkSize = 512 * 1024;
     pdfDefaultOptions.disableAutoFetch = true;
+    pdfDefaultOptions.assetsFolder = 'assets/pdf-viewer/';
   }
 
   isLoading = true;
