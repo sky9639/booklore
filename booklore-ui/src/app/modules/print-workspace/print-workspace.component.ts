@@ -566,20 +566,6 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     return trimSize === 'A4' ? 'A4' : 'A4';
   }
 
-  recalculateSpine() {
-    this.workspaceState.recalcSpine();
-    this.workspaceState.clearPdfPath();
-    this.workspaceState.clearPreviewPath();
-    this.saveParams();
-    this.compositeCache.clear();
-    this.refreshComposite();
-
-    const spineWidth = this.workspace?.spine_width_mm ?? 0;
-    this.addOperationLog(`已按页数与纸厚自动重算书脊宽度：${spineWidth.toFixed(2)} mm`, 'parameter', {
-      status: 'success',
-      highlight: true,
-    });
-  }
 
   getPageHeight(): number {
     if (!this.workspace) return 0;
@@ -1457,6 +1443,11 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
         if (savedItem) {
           this.spreadPreview = this.buildSpreadPreview(savedItem);
         }
+
+        // 清除拼版预览缓存，强制刷新
+        this.previewPagesCache = [];
+        this.compositeCache.clear();
+        this.refreshComposite();
 
         this.aiCropVisible = false;
         this.aiLastResult = 'success';
