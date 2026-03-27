@@ -10,6 +10,7 @@ ai_generator.py — Booklore Print Engine
 """
 
 import base64
+import hashlib
 import io
 import json
 import logging
@@ -39,6 +40,80 @@ TRIM_SIZE_PX = {
     "B5": (1390, 1969),
 }
 
+
+def calculate_dynamic_resolution(
+    cover_path: Path,
+    trim_size: str,
+    spine_width_mm: float,
+) -> tuple[int, int, int, int]:
+    """
+    Calculate target pixel dimensions based on original cover resolution.
+
+    Returns:
+        (page_w, page_h, spine_px, target_dpi)
+        Falls back to TRIM_SIZE_PX if cover is low-res or unreadable.
+    """
+    # Get trim dimensions in mm
+    trim_map_mm = {
+        "A5": (148, 210),
+        "B5": (176, 250),
+        "A4": (210, 297),
+    }
+    trim_width_mm, trim_height_mm = trim_map_mm.get(trim_size, trim_map_mm["A5"])
+
+    # Try to read cover dimensions
+    try:
+        with Image.open(cover_path) as cover:
+            cover_w, cover_h = cover.size
+    except Exception:
+        # Fallback to default
+        page_w, page_h = TRIM_SIZE_PX.get(trim_size, TRIM_SIZE_PX["A5"])
+        spine_px = max(1, round(spine_width_mm * 300 / 25.4))
+        return page_w, page_h, spine_px, 300
+
+    # Calculate cover DPI
+    cover_dpi_w = cover_w / (trim_width_mm / 25.4)
+    cover_dpi_h = cover_h / (trim_height_mm / 25.4)
+    cover_dpi = min(cover_dpi_w, cover_dpi_h)
+
+    # Use cover DPI if it's higher than baseline (212 for A5)
+    baseline_dpi = TRIM_SIZE_PX.get(trim_size, TRIM_SIZE_PX["A5"])[0] / (trim_width_mm / 25.4)
+
+    if cover_dpi >= baseline_dpi:
+        target_dpi = cover_dpi
+        page_w = round(trim_width_mm / 25.4 * target_dpi)
+        page_h = round(trim_height_mm / 25.4 * target_dpi)
+        spine_px = max(1, round(spine_width_mm / 25.4 * target_dpi))
+    else:
+        # Cover is low-res, use defaults
+        page_w, page_h = TRIM_SIZE_PX.get(trim_size, TRIM_SIZE_PX["A5"])
+        spine_px = max(1, round(spine_width_mm * 300 / 25.4))
+        target_dpi = 300
+
+    return page_w, page_h, spine_px, int(target_dpi)
+
+
+def _enhance_spine_quality(spine_img: Image.Image, target_w: int, target_h: int) -> Image.Image:
+    """
+    Phase 2 书脊清晰度增强。
+
+    当原始裁切区域像素不足时，通过高质量重采样和轻度锐化提升清晰度。
+    """
+    from PIL import ImageFilter
+
+    # 先用 LANCZOS 重采样到目标尺寸
+    enhanced = spine_img.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+    # 应用轻度锐化，增强文字边缘
+    # UnsharpMask(radius, percent, threshold)
+    # - radius: 锐化半径，2-3 适合文字
+    # - percent: 锐化强度，80-120 为保守范围
+    # - threshold: 阈值，避免过度锐化平滑区域
+    enhanced = enhanced.filter(ImageFilter.UnsharpMask(radius=2.5, percent=100, threshold=2))
+
+    return enhanced
+
+
 BOOKLORE_ENV_PATH = Path("booklore.env")
 AI_PROFILES_CONFIG_PATH = Path(os.getenv("AI_PROFILES_CONFIG_PATH", "./ai_profiles.json"))
 PROMPT_CONFIG_PATH = Path(os.getenv("AI_PROMPT_CONFIG_PATH", "./ai_prompts.json"))
@@ -47,7 +122,7 @@ GEMINI_API_PATH = os.getenv("GEMINI_API_PATH", "/google/v1/models/{model}")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
 GEMINI_TIMEOUT = int(os.getenv("GEMINI_TIMEOUT", "240"))
-GEMINI_IMAGE_MAX_SEND = int(os.getenv("GEMINI_IMAGE_MAX_SEND", "2048"))
+GEMINI_IMAGE_MAX_SEND = int(os.getenv("GEMINI_IMAGE_MAX_SEND", "4096"))
 
 
 def reload_runtime_config() -> None:
@@ -61,7 +136,7 @@ def reload_runtime_config() -> None:
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
     GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
     GEMINI_TIMEOUT = int(os.getenv("GEMINI_TIMEOUT", "240"))
-    GEMINI_IMAGE_MAX_SEND = int(os.getenv("GEMINI_IMAGE_MAX_SEND", "2048"))
+    GEMINI_IMAGE_MAX_SEND = int(os.getenv("GEMINI_IMAGE_MAX_SEND", "4096"))
 
 
 def load_profiles_config() -> dict:
@@ -96,7 +171,10 @@ def load_profiles_config() -> dict:
                 "apiKey": GEMINI_API_KEY,
                 "model": GEMINI_IMAGE_MODEL,
                 "timeout": GEMINI_TIMEOUT,
-                "imageMaxSend": 2048,
+                "imageSize": "2K",
+                "imageSizeSupported": None,
+                "imageSizeDetectionStatus": "unknown",
+                "imageSizeDetectionFingerprint": None,
             }
         ],
     }
@@ -121,7 +199,10 @@ def save_profiles_config(config: dict) -> dict:
             "apiKey": str(profile.get("apiKey", "")).strip(),
             "model": str(profile.get("model", "")).strip(),
             "timeout": int(profile.get("timeout", 240)),
-            "imageMaxSend": int(profile.get("imageMaxSend", 2048)),
+            "imageSize": str(profile.get("imageSize", "2K")).strip(),
+            "imageSizeSupported": profile.get("imageSizeSupported"),
+            "imageSizeDetectionStatus": str(profile.get("imageSizeDetectionStatus", "unknown")).strip(),
+            "imageSizeDetectionFingerprint": profile.get("imageSizeDetectionFingerprint"),
         })
 
     if not any(item["id"] == active_id for item in normalized_profiles):
@@ -198,7 +279,6 @@ def save_ai_runtime_config(config: dict) -> dict:
         "GEMINI_API_KEY": str(active_profile.get("apiKey", GEMINI_API_KEY)).strip(),
         "GEMINI_IMAGE_MODEL": str(active_profile.get("model", GEMINI_IMAGE_MODEL)).strip(),
         "GEMINI_TIMEOUT": str(active_profile.get("timeout", GEMINI_TIMEOUT)).strip(),
-        "GEMINI_IMAGE_MAX_SEND": str(active_profile.get("imageMaxSend", GEMINI_IMAGE_MAX_SEND)).strip(),
         "AI_PROFILES_CONFIG_PATH": str(AI_PROFILES_CONFIG_PATH),
         "AI_PROMPT_CONFIG_PATH": str(config.get("promptConfigPath", PROMPT_CONFIG_PATH)).strip(),
     }
@@ -244,6 +324,55 @@ def build_prompt(book_name: str, template_id: Optional[str] = None) -> tuple[str
         template = get_active_template(prompt_config)
     content = str(template.get("content", "")).replace("{book_name}", book_name or "")
     return content, template
+
+
+def _build_image_size_fingerprint(base_url: str, api_path: str, api_key: str, model: str) -> str:
+    raw = "|".join([
+        str(base_url).strip(),
+        str(api_path).strip(),
+        str(api_key).strip(),
+        str(model).strip(),
+    ])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _probe_image_size_support(url: str, headers: dict, timeout: int) -> bool:
+    payload = {
+        "contents": [{"parts": [{"text": "请生成一个简单的纯色方形测试图。"}]}],
+        "generationConfig": {
+            "responseModalities": ["TEXT", "IMAGE"],
+            "imageSize": "2K",
+        },
+    }
+
+    probe_timeout = min(timeout, 30)
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=probe_timeout)
+    except requests.RequestException:
+        return False
+
+    if response.ok:
+        return True
+
+    try:
+        error_json = response.json()
+    except Exception:
+        return False
+
+    error_obj = error_json.get("error") or {}
+    if not isinstance(error_obj, dict):
+        return False
+
+    message = str(error_obj.get("message_cn") or error_obj.get("message") or "").lower()
+    unsupported_markers = [
+        "imagesize",
+        "unknown field",
+        "invalid argument",
+        "unsupported",
+        "not supported",
+    ]
+    return not any(marker in message for marker in unsupported_markers)
 
 
 def test_gemini_connection(config_override: Optional[dict] = None) -> dict:
@@ -297,15 +426,21 @@ def test_gemini_connection(config_override: Optional[dict] = None) -> dict:
 
     # 用户手填的 apiPath 中可能包含 {model} 占位符，需要替换
     url = f"{base_url}{api_path}".replace("{model}", model)
+    detection_fingerprint = _build_image_size_fingerprint(base_url, api_path, api_key, model)
 
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=timeout)
         if response.ok:
+            image_size_supported = _probe_image_size_support(url, headers, timeout)
             return {
                 "success": True,
                 "message": "连接测试成功",
                 "statusCode": response.status_code,
                 "url": url,
+                "capabilities": {
+                    "imageSize": image_size_supported,
+                },
+                "detectionFingerprint": detection_fingerprint,
             }
 
         # 解析错误类型
@@ -570,15 +705,32 @@ def crop_gemini_spread(
     spine_raw = spread.crop((x2, y1, x3, y2)).convert("RGB")
     front_raw = spread.crop((x3, y1, x4, y2)).convert("RGB")
 
-    # 封面/封底：缩放到目标尺寸 @300DPI
+    # 封面/封底：缩放到目标尺寸
     back_img = _resize_output_image(back_raw, page_w, page_h)
     front_img = _resize_output_image(front_raw, page_w, page_h)
 
-    # 书脊：保持裁切区域原始宽度，按 spine_dpi 缩放高度
-    # spine_dpi=600 时，6mm 书脊 ≈ 142px（比 300DPI 的 71px 多一倍细节）
-    spine_px_w = spine_raw.width  # 保持裁切区域原始宽度
-    spine_px_h = max(1, int(spine_raw.height * spine_dpi / 300))
-    spine_img = spine_raw.resize((spine_px_w, spine_px_h), Image.Resampling.LANCZOS)
+    # 书脊：Phase 2 改为显式输出目标宽高，而不是保留原始裁切宽度
+    spine_target_w = max(1, spine_w)
+    spine_target_h = max(page_h, round(page_h * spine_dpi / 300))
+
+    # 根据原始裁切宽度判断是否需要增强
+    source_to_target_ratio = spine_raw.width / max(1, spine_target_w)
+    needs_spine_enhancement = source_to_target_ratio < 1.15
+
+    logger.info(
+        "[Spine Analyze] source=%sx%s target=%sx%s ratio=%.3f enhance=%s",
+        spine_raw.width,
+        spine_raw.height,
+        spine_target_w,
+        spine_target_h,
+        source_to_target_ratio,
+        needs_spine_enhancement,
+    )
+
+    if needs_spine_enhancement:
+        spine_img = _enhance_spine_quality(spine_raw, spine_target_w, spine_target_h)
+    else:
+        spine_img = spine_raw.resize((spine_target_w, spine_target_h), Image.Resampling.LANCZOS)
 
     return front_img, back_img, spine_img, crop_lines
 
@@ -596,11 +748,14 @@ def _generate_spread_gemini(
         raise ValueError("GEMINI_API_KEY 未在 booklore.env 中配置")
 
     prompt, template = build_prompt(book_name, template_id=template_id)
+    spread_target_w = max(4000, page_w * 2 + max(spine_w * 6, spine_w + 400))
     prompt = (
         f"{prompt}\n\n"
         "【输出要求】必须直接返回最终生成的图片结果。"
         "不要返回任何文字说明、Markdown、代码块、前言、后记或额外解释。"
-        "如果无法生成图片，也不要输出描述性文字。"
+        "如果无法生成图片，也不要输出描述性文字。\n"
+        f"【分辨率要求】生成的展开图必须保持高分辨率（至少{spread_target_w}px宽度），确保书脊文字清晰锐利。"
+        "书脊区域必须给出清晰、锐利、可印刷的标题文字边缘，避免模糊、发光、糊边和低对比度。"
     )
 
     if progress_callback:
@@ -608,16 +763,16 @@ def _generate_spread_gemini(
         progress_callback(10, f"已加载模板：{template.get('name', '未命名模板')}")
 
     scale = min(GEMINI_IMAGE_MAX_SEND / max(cover.size), 1.0)
-    cover_send = cover.resize(
+    cover_send = cover if scale >= 1.0 else cover.resize(
         (int(cover.width * scale), int(cover.height * scale)),
         Image.Resampling.LANCZOS,
     )
     buf = io.BytesIO()
-    cover_send.save(buf, format="JPEG", quality=90)
+    cover_send.save(buf, format="JPEG", quality=95)
     img_b64 = base64.b64encode(buf.getvalue()).decode()
 
     if progress_callback:
-        progress_callback(15, "【第二步】封面已压缩，准备请求 Gemini")
+        progress_callback(15, "【第二步】封面参考图已准备，准备请求 Gemini")
 
     headers = {
         "Content-Type": "application/json",
@@ -625,26 +780,78 @@ def _generate_spread_gemini(
     }
     url = f"{GEMINI_API_URL}{GEMINI_API_PATH}".replace("{model}", GEMINI_IMAGE_MODEL)
 
+    runtime_config = get_ai_runtime_config(mask_secret=False)
+    active_profile_id = runtime_config.get("activeProfileId", "")
+    active_profile = None
+    for profile in runtime_config.get("profiles", []):
+        if profile.get("id") == active_profile_id:
+            active_profile = profile
+            break
+    if not active_profile:
+        profiles_list = runtime_config.get("profiles", [])
+        active_profile = profiles_list[0] if profiles_list else {}
+
+    current_fingerprint = _build_image_size_fingerprint(
+        active_profile.get("baseUrl", ""),
+        active_profile.get("apiPath", ""),
+        active_profile.get("apiKey", ""),
+        active_profile.get("model", ""),
+    )
+    image_size_supported = (
+        active_profile.get("imageSizeSupported") is True
+        and active_profile.get("imageSizeDetectionStatus") == "supported"
+        and active_profile.get("imageSizeDetectionFingerprint") == current_fingerprint
+    )
+    image_size_value = str(active_profile.get("imageSize", "2K")).strip()
+
     def request_generation(prompt_text: str) -> tuple[dict, dict]:
+        generation_config = {"responseModalities": ["TEXT", "IMAGE"]}
+        if image_size_supported and image_size_value in ("1K", "2K", "4K"):
+            generation_config["imageSize"] = image_size_value
+
         payload = {
             "contents": [{
                 "parts": [
                     {"text": prompt_text},
-                    {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
+                    {"inlineData": {"mimeType": "image/jpeg", "data": img_b64}},
                 ]
             }],
-            "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+            "generationConfig": generation_config,
         }
 
-        response = requests.post(
-            url,
-            headers=headers,
-            json=payload,
-            timeout=GEMINI_TIMEOUT,
-        )
+        try:
+            response = requests.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=GEMINI_TIMEOUT,
+            )
+        except requests.exceptions.Timeout:
+            raise RuntimeError("AI_TIMEOUT::AI 生图超时：该网关长时间未返回图片，可尝试更换模型或中转")
+        except requests.exceptions.ConnectionError as e:
+            error_msg = str(e)
+            if "RemoteDisconnected" in error_msg or "Connection aborted" in error_msg:
+                raise RuntimeError("AI_CONNECTION_ABORTED::AI 生图连接被对端中断：中转服务主动断开连接，通常是网关不稳定或上游限流")
+            else:
+                raise RuntimeError(f"AI_NETWORK_ERROR::AI 生图网络异常：无法连接到 {GEMINI_API_URL}")
+        except requests.RequestException as e:
+            raise RuntimeError(f"AI_REQUEST_ERROR::AI 生图请求异常：{str(e)}")
+
         if not response.ok:
-            logger.error("[Gemini Spread] API 错误 %s: %s", response.status_code, response.text[:400])
-            raise RuntimeError(f"Gemini 请求失败: HTTP {response.status_code} - {response.text[:300]}")
+            status_code = response.status_code
+            error_text = response.text[:500]
+            logger.error("[Gemini Spread] API 错误 %s: %s", status_code, error_text)
+
+            if status_code == 400:
+                raise RuntimeError(f"AI_BAD_REQUEST::AI 生图失败 (HTTP 400)：通常是模型名 / API Path / 请求体格式不兼容 - {error_text[:200]}")
+            elif status_code == 401 or status_code == 403:
+                raise RuntimeError("AI_AUTH_FAILED::AI 生图鉴权失败：API Key 无效或已过期")
+            elif status_code == 503:
+                raise RuntimeError("AI_SERVICE_UNAVAILABLE::AI 生图失败 (HTTP 503)：上游模型暂时不可用")
+            elif status_code >= 500:
+                raise RuntimeError(f"AI_SERVER_ERROR::AI 生图服务端错误 (HTTP {status_code})：{error_text[:200]}")
+            else:
+                raise RuntimeError(f"AI_HTTP_ERROR::AI 生图失败 (HTTP {status_code})：{error_text[:200]}")
 
         data = response.json()
         usage = data.get("usageMetadata", {}) or {}
@@ -665,20 +872,23 @@ def _generate_spread_gemini(
 
     try:
         spread = _extract_image_from_response(data, target_size=None)
-    except RuntimeError as first_error:
-        if "未找到图片数据" not in str(first_error):
-            raise
+    except RuntimeError as e:
+        if "未找到图片数据" in str(e):
+            raise RuntimeError("AI_NO_IMAGE::AI 返回了非图片内容：该模型/路径可能不支持当前图片生成请求格式")
+        raise
 
-        logger.warning("[Gemini Spread] first attempt returned text-only response, retrying once")
-        if progress_callback:
-            progress_callback(75, "【第四步】首次返回非图片结果，自动重试一次")
-
-        retry_prompt = (
-            f"{prompt}\n\n"
-            "再次强调：这次只能输出图片本体，禁止输出任何文字。"
-        )
-        data, token_usage = request_generation(retry_prompt)
-        spread = _extract_image_from_response(data, target_size=None)
+    estimated_spine_crop_w = max(1, round(spread.width * spine_w / max(1, page_w * 2 + spine_w)))
+    logger.info(
+        "[Gemini Spread] returned=%sx%s target_page=%sx%s target_spine=%s estimated_spine_crop=%s",
+        spread.width,
+        spread.height,
+        page_w,
+        page_h,
+        spine_w,
+        estimated_spine_crop_w,
+    )
+    if progress_callback:
+        progress_callback(85, f"【第五步】展开图尺寸: {spread.width}x{spread.height}px，预估书脊原始宽度: {estimated_spine_crop_w}px")
 
     crop_lines = _guess_crop_lines(spread.size, page_w, page_h, spine_w)
     front_img, back_img, spine_img, crop_lines = crop_gemini_spread(
@@ -690,7 +900,7 @@ def _generate_spread_gemini(
     )
 
     if progress_callback:
-        progress_callback(90, "【第五步】已生成初始裁切线")
+        progress_callback(90, "【第六步】已生成初始裁切线")
 
     return spread, back_img, spine_img, crop_lines, token_usage
 
@@ -714,12 +924,15 @@ def generate_spread_preview(
         raise FileNotFoundError(f"封面图不存在: {cover_path}")
 
     cover = Image.open(cover_path).convert("RGB")
-    page_w, page_h = TRIM_SIZE_PX.get(trim_size, TRIM_SIZE_PX["A5"])
-    spine_px = max(1, round(spine_width_mm * 300 / 25.4))  # 基准DPI=300
+    page_w, page_h, spine_px, target_dpi = calculate_dynamic_resolution(
+        cover_path=cover_path,
+        trim_size=trim_size,
+        spine_width_mm=spine_width_mm,
+    )
 
     if progress_callback:
         progress_callback(0, "开始生成 Gemini 展开图...")
-        progress_callback(2, f"封面尺寸: {cover.width}x{cover.height}px")
+        progress_callback(2, f"封面尺寸: {cover.width}x{cover.height}px, 目标DPI: {target_dpi}")
 
     spread, _back_img, _spine_img, crop_lines, token_usage = _generate_spread_gemini(
         cover=cover,
@@ -751,6 +964,8 @@ def save_cropped_materials(
     spine_width_mm: float,
     vertical_lines: list[int],
     horizontal_lines: list[int],
+    source_cover_filename: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
 ) -> dict:
     """
     保存用户裁切后的素材（封面、书脊、封底）。
@@ -762,8 +977,25 @@ def save_cropped_materials(
         raise FileNotFoundError(f"展开图不存在: {spread_path}")
 
     spread = Image.open(spread_path).convert("RGB")
-    page_w, page_h = TRIM_SIZE_PX.get(trim_size, TRIM_SIZE_PX["A5"])
-    spine_px = max(1, round(spine_width_mm * 300 / 25.4))  # 基准DPI=300
+
+    if source_cover_filename:
+        cover_path = Path(print_root) / "cover" / source_cover_filename
+        page_w, page_h, spine_px, target_dpi = calculate_dynamic_resolution(
+            cover_path=cover_path,
+            trim_size=trim_size,
+            spine_width_mm=spine_width_mm,
+        )
+        # Spine uses 2x DPI for text clarity
+        spine_dpi = target_dpi * 2
+    else:
+        # Fallback to defaults
+        page_w, page_h = TRIM_SIZE_PX.get(trim_size, TRIM_SIZE_PX["A5"])
+        spine_px = max(1, round(spine_width_mm * 300 / 25.4))
+        target_dpi = 300
+        spine_dpi = 600
+
+    if progress_callback:
+        progress_callback(10, f"目标DPI: {target_dpi}, 书脊DPI: {spine_dpi}")
 
     front_img, back_img, spine_img, crop_lines = crop_gemini_spread(
         spread,
@@ -771,18 +1003,24 @@ def save_cropped_materials(
         page_h,
         spine_px,
         crop_lines={"vertical": vertical_lines, "horizontal": horizontal_lines},
-        spine_dpi=600,  # 书脊使用600 DPI，保持文字清晰
+        spine_dpi=spine_dpi,
     )
+
+    if progress_callback:
+        progress_callback(50, "裁切完成，正在保存素材...")
 
     front_output_dir = Path(print_root) / "front_output"
     timestamp = _build_timestamp_suffix()
     front_filename = f"ai_front_{timestamp}.png"
-    _save_image(front_output_dir / front_filename, front_img, dpi=300)
+    _save_image(front_output_dir / front_filename, front_img, dpi=target_dpi)
 
-    # 封底使用标准300 DPI
-    back_filename = _save_generated_image(print_root, "back", back_img, "ai", dpi=300)
-    # 书脊使用600 DPI，文字更清晰
-    spine_filename = _save_generated_image(print_root, "spine", spine_img, "ai", dpi=600)
+    # 封底使用动态DPI
+    back_filename = _save_generated_image(print_root, "back", back_img, "ai", dpi=target_dpi)
+    # 书脊使用2x DPI，文字更清晰
+    spine_filename = _save_generated_image(print_root, "spine", spine_img, "ai", dpi=spine_dpi)
+
+    if progress_callback:
+        progress_callback(100, "素材保存完成")
 
     return {
         "front_filename": front_filename,
@@ -816,8 +1054,12 @@ def generate_ai_material(
     if not cover_path.exists():
         raise FileNotFoundError(f"封面图不存在: {cover_path}")
 
-    page_w, page_h = TRIM_SIZE_PX.get(trim_size, TRIM_SIZE_PX["A5"])
-    spine_px = max(1, round(spine_width_mm * 300 / 25.4))  # 基准DPI=300
+    page_w, page_h, spine_px, target_dpi = calculate_dynamic_resolution(
+        cover_path=cover_path,
+        trim_size=trim_size,
+        spine_width_mm=spine_width_mm,
+    )
+    spine_dpi = target_dpi * 2
     cover = Image.open(cover_path).convert("RGB")
 
     if progress_callback:
@@ -836,9 +1078,9 @@ def generate_ai_material(
     _save_spread_preview(print_root, spread)
 
     if target == "back":
-        filename = _save_generated_image(print_root, "back", back_img, "ai", dpi=300)
+        filename = _save_generated_image(print_root, "back", back_img, "ai", dpi=target_dpi)
     elif target == "spine":
-        filename = _save_generated_image(print_root, "spine", spine_img, "ai", dpi=600)
+        filename = _save_generated_image(print_root, "spine", spine_img, "ai", dpi=spine_dpi)
     else:
         raise ValueError("target 必须为 spine 或 back")
 

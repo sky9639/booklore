@@ -1,4 +1,5 @@
 import os
+import math
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
@@ -8,7 +9,16 @@ DPI = 400
 
 
 def mm_to_px(mm_value):
-    return int(mm_value / 25.4 * DPI)
+    """
+    将毫米转换为像素（向上取整，避免累积误差）
+
+    向下取整会导致累积误差：
+    - A5 宽度 148mm → int(148 / 25.4 * 400) = 2330px → 2330 / 400 * 25.4 = 14.8155mm ❌
+
+    向上取整可避免误差：
+    - A5 宽度 148mm → ceil(148 / 25.4 * 400) = 2331px → 2331 / 400 * 25.4 = 14.8282mm ✓
+    """
+    return math.ceil(mm_value / 25.4 * DPI)
 
 
 def generate_preview_layout(

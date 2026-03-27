@@ -15,11 +15,11 @@
     </div>
   </div>
 
-  <!-- ===================== PDF尺寸信息 ===================== -->
+  <!-- ===================== PDF信息与格式化 ===================== -->
   <div class="card pdf-size-info">
     <div class="param-header">
       <i class="pi pi-ruler-combined"></i>
-      <span>PDF尺寸</span>
+      <span>PDF 信息与格式化</span>
       <button class="preview-pdf-btn" (click)="previewPdf()" title="预览PDF">
         <i class="pi pi-eye"></i>
       </button>
@@ -291,12 +291,11 @@
     </div>
   </div>
 
-  <!-- ===================== AI生成日志 ===================== -->
+  <!-- ===================== Operation Log ===================== -->
   <div class="ai-log-sidebar">
     <div class="ai-log-header">
-      <span>📋 生成日志</span>
+      <span>📋 操作日志</span>
 
-      <!-- AI 生成进度条（移到日志标题行右侧） -->
       <div class="ai-progress-inline" *ngIf="aiGenerating || aiLastResult === 'success'">
         <div class="ai-progress-bar-inline">
           <div class="ai-progress-fill" [style.width.%]="aiProgress"></div>
@@ -305,13 +304,14 @@
       </div>
     </div>
     <div class="ai-log-content" #aiLogContent>
-      <div class="ai-log-empty" *ngIf="aiLogMessages.length === 0">
+      <div class="ai-log-empty" *ngIf="operationLogs.length === 0">
         <i class="pi pi-info-circle"></i>
-        <span>暂无日志，打开 AI裁切 后点击“AI生图”开始生成</span>
+        <span>暂无日志，操作参数、格式化 PDF、AI 裁切等关键动作将记录在此</span>
       </div>
-      <div class="ai-log-item" *ngFor="let log of aiLogMessages" [class.ai-log-highlight]="log.highlight">
+      <div class="ai-log-item" *ngFor="let log of operationLogs" [class.ai-log-highlight]="log.highlight" [attr.data-status]="log.status">
         <span class="ai-log-time">{{ log.time }}</span>
-        <span class="ai-log-percent">{{ log.percent }}%</span>
+        <span class="ai-log-percent" *ngIf="log.percent !== undefined">{{ log.percent }}%</span>
+        <span class="ai-log-percent" *ngIf="log.percent === undefined"></span>
         <span class="ai-log-message">{{ log.message }}</span>
       </div>
     </div>
@@ -458,25 +458,18 @@
             *ngIf="workspace?.trim_size === 'A4' && i === 1; else fullRuler"
           >
             <div class="ruler-h ruler-h-spine-only">
-              <span class="ruler-val-h">{{ getPreviewPageWidth(i) }} mm</span>
+              <span class="ruler-val-h">{{ getTrimPageWidth(i) }} mm</span>
             </div>
           </ng-container>
           <ng-template #fullRuler>
             <div class="ruler-h">
               <div class="ruler-h-inner">
-                <span class="ruler-val-h">{{ getPreviewPageWidth(i) }} mm</span>
+                <span class="ruler-val-h">{{ getTrimPageWidth(i) }} mm</span>
               </div>
             </div>
           </ng-template>
 
           <div class="preview-image-row">
-            <!-- [问题2+3] 左侧垂直标尺，纯 CSS 实现 -->
-            <div class="ruler-v">
-              <div class="ruler-v-inner">
-                <span class="ruler-val-v">{{ getPreviewPageHeight() }} mm</span>
-              </div>
-            </div>
-
             <!-- 预览图本体 -->
             <div
               class="preview-box large"
@@ -488,6 +481,13 @@
               <div *ngIf="!page" class="preview-no-material">
                 <i class="pi pi-image"></i>
                 <span>暂无素材</span>
+              </div>
+            </div>
+
+            <!-- 垂直标尺：只在最后一页右侧显示 -->
+            <div class="ruler-v" *ngIf="i === previewPages.length - 1">
+              <div class="ruler-v-inner">
+                <span class="ruler-val-v">{{ getTrimPageHeight() }} mm</span>
               </div>
             </div>
           </div>

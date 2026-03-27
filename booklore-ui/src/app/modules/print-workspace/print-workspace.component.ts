@@ -39,6 +39,18 @@ import { GeminiCropDialogComponent } from "./components/gemini-crop-dialog.compo
 import { TrimSize, SpreadPreviewItem } from "./models/workspace.model";
 import { calcSpineWidth } from "./utils/dimension.util";
 
+interface OperationLogItem {
+  time: string;
+  type: OperationLogType;
+  message: string;
+  status?: OperationLogStatus;
+  percent?: number;
+  highlight?: boolean;
+}
+
+type OperationLogType = 'parameter' | 'pdf' | 'ai' | 'crop' | 'material';
+type OperationLogStatus = 'info' | 'success' | 'warning' | 'error';
+
 interface WorkspaceViewModel {
   bookName?: string;
   trimSize: TrimSize;
@@ -145,6 +157,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   cropSaving = false;
   spreadHistory: SpreadPreviewItem[] = [];
   spreadPreview: SpreadPreviewItem | null = null;
+  private deletedSpreadHistoryFilenames = new Set<string>();
 
   get canAiGenerate(): boolean {
     return !!this.workspace?.cover?.selected;
@@ -175,6 +188,13 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     ).subscribe({
       next: (nextWs) => this.workspaceState.setWorkspace(nextWs),
       error: (err) => console.error('保存拼版参数失败', err),
+    });
+
+    // 设置参数日志去抖订阅
+    this.parameterLogSubscription = this.parameterLogSubject.pipe(
+      debounceTime(800)
+    ).subscribe(({ field, value }) => {
+      this.addOperationLog(`${field}修改为 ${value}`, 'parameter', { status: 'info' });
     });
 
     // 订阅 workspace$ — 素材上传/删除/选择后后端返回新 ws，
@@ -219,9 +239,12 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.wsSub?.unsubscribe();
     this.saveParamsSubscription?.unsubscribe();
+    this.parameterLogSubscription?.unsubscribe();
+    this.deletedSpreadHistoryFilenames.clear();
   }
 
   private initWorkspace(): void {
+    this.deletedSpreadHistoryFilenames.clear();
     this.print.initWorkspace(this.bookId).subscribe({
       next: (ws) => {
         console.log('[initWorkspace] 后端返回 workspace:', ws);
@@ -418,17 +441,18 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       .then(([coverImg, spineImg, backImg]) => {
         if (renderToken !== this.compositeRenderToken || !coverImg) return;
 
-        // 第1页：输出纸张画布，居中放置封面+书脊
+        // 第1页：图像打印尺寸画布（不含输出纸张白边）
         const canvas1 = document.createElement("canvas");
-        canvas1.width = sheetPx;
-        canvas1.height = CANVAS_H;
+        const contentW1 = trimPx + spinePx;
+        canvas1.width = contentW1;
+        canvas1.height = trimHPx;
         const ctx1 = canvas1.getContext("2d")!;
         ctx1.fillStyle = "#ffffff";
-        ctx1.fillRect(0, 0, sheetPx, CANVAS_H);
+        ctx1.fillRect(0, 0, contentW1, trimHPx);
 
-        const contentW1 = trimPx + spinePx;
-        const xOffset1 = (sheetPx - contentW1) / 2;
-        const yOffset1 = (CANVAS_H - trimHPx) / 2;
+        // 内容直接绘制在画布上（无偏移）
+        const xOffset1 = 0;
+        const yOffset1 = 0;
 
         if (spineImg && spinePx > 0) {
           ctx1.drawImage(spineImg, xOffset1, yOffset1, spinePx, trimHPx);
@@ -439,19 +463,18 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
 
         const page1Url = canvas1.toDataURL("image/jpeg", 0.92);
 
-        // 第2页：输出纸张画布，居中放置封底
+        // 第2页：图像打印尺寸画布（不含输出纸张白边）
         let page2Url = "";
         if (backImg) {
           const canvas2 = document.createElement("canvas");
-          canvas2.width = sheetPx;
-          canvas2.height = CANVAS_H;
+          canvas2.width = trimPx;
+          canvas2.height = trimHPx;
           const ctx2 = canvas2.getContext("2d")!;
           ctx2.fillStyle = "#ffffff";
-          ctx2.fillRect(0, 0, sheetPx, CANVAS_H);
+          ctx2.fillRect(0, 0, trimPx, trimHPx);
 
-          const xOffset2 = (sheetPx - trimPx) / 2;
-          const yOffset2 = (CANVAS_H - trimHPx) / 2;
-          ctx2.drawImage(backImg, xOffset2, yOffset2, trimPx, trimHPx);
+          // 内容直接绘制在画布上（无偏移）
+          ctx2.drawImage(backImg, 0, 0, trimPx, trimHPx);
 
           page2Url = canvas2.toDataURL("image/jpeg", 0.92);
         }
@@ -471,6 +494,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
 
   setTrim(size: TrimSize) {
     const currentOutputSheet = this.workspace?.output_sheet_size ?? 'A4';
+    const oldTrimSize = this.workspace?.trim_size;
 
     this.workspaceState.batchUpdate((ws) => {
       const nextOutputSheet = this.isTrimAndOutputSheetCombinationValid(size, currentOutputSheet)
@@ -491,6 +515,10 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
 
     this.refreshComposite();
     this.saveParams();
+
+    if (oldTrimSize !== size) {
+      this.addOperationLog(`图像打印尺寸切换为 ${size}`, 'parameter', { status: 'info' });
+    }
   }
 
   setOutputSheetSize(size: TrimSize) {
@@ -499,6 +527,8 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       alert(`无效组合：${trimSize} 成书尺寸不支持 ${size} 输出纸张`);
       return;
     }
+    const oldOutputSheet = this.workspace?.output_sheet_size;
+
     this.workspaceState.batchUpdate((ws) => ({
       ...ws,
       output_sheet_size: size,
@@ -507,6 +537,10 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     }));
     this.refreshComposite();
     this.saveParams();
+
+    if (oldOutputSheet !== size) {
+      this.addOperationLog(`输出纸张尺寸切换为 ${size}`, 'parameter', { status: 'info' });
+    }
   }
 
   isOutputSheetSizeValid(size: TrimSize): boolean {
@@ -539,6 +573,12 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     this.saveParams();
     this.compositeCache.clear();
     this.refreshComposite();
+
+    const spineWidth = this.workspace?.spine_width_mm ?? 0;
+    this.addOperationLog(`已按页数与纸厚自动重算书脊宽度：${spineWidth.toFixed(2)} mm`, 'parameter', {
+      status: 'success',
+      highlight: true,
+    });
   }
 
   getPageHeight(): number {
@@ -553,19 +593,55 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
 
   getPageRatio(): string {
     if (!this.workspace) return "1/1";
-    return this.preview.getPageRatio(this.workspace);
+    const w = this.preview.getPageWidth(this.workspace);
+    const h = this.preview.getPageHeight(this.workspace);
+    return `${w}/${h}`;
   }
 
   getPreviewPageRatio(index: number): string {
     if (!this.workspace) return "1/1";
-    const w = this.preview.getPreviewPageWidth(this.workspace, index);
-    const h = this.preview.getSheetHeight(this.workspace);
+    const w = this.getTrimPageWidth(index);
+    const h = this.getTrimPageHeight();
     return `${w}/${h}`;
   }
 
   getPreviewPageWidth(index: number): number {
     if (!this.workspace) return 0;
     return this.preview.getPreviewPageWidth(this.workspace, index);
+  }
+
+  /**
+   * 获取图像打印尺寸的宽度（用于标尺显示）
+   *
+   * 与 getPreviewPageWidth 的区别：
+   * - getPreviewPageWidth: 返回输出纸张尺寸（用于 Canvas 画布和 aspect-ratio）
+   * - getTrimPageWidth: 返回图像打印尺寸（用于标尺数值显示）
+   */
+  getTrimPageWidth(index: number): number {
+    if (!this.workspace) return 0;
+    const trimWidth = this.preview.getPageWidth(this.workspace);
+    const spine = this.workspace.spine_width_mm ?? 0;
+
+    // A4 模式：第2页是书脊
+    if (this.workspace.trim_size === "A4" && index === 1) {
+      return Math.max(spine, 1);
+    }
+
+    // A5/B5 模式：第1页是封面+书脊
+    if (this.workspace.trim_size !== "A4" && index === 0) {
+      return trimWidth + spine;
+    }
+
+    // 其他页：单页宽度
+    return trimWidth;
+  }
+
+  /**
+   * 获取图像打印尺寸的高度（用于标尺显示）
+   */
+  getTrimPageHeight(): number {
+    if (!this.workspace) return 0;
+    return this.preview.getPageHeight(this.workspace);
   }
 
   trackPreview(index: number, item: string) {
@@ -642,6 +718,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       ...ws,
       page_count: value,
     }));
+    this.queueParameterLog('页数', value);
   }
 
   onPaperThicknessChange(value: number) {
@@ -650,6 +727,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       ...ws,
       paper_thickness: value,
     }));
+    this.queueParameterLog('纸厚', `${value} mm`);
   }
 
   onSpineWidthChange(value: number) {
@@ -661,6 +739,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     this.compositeCache.clear();
     this.refreshComposite();
     this.saveParams();
+    this.queueParameterLog('书脊宽度', `${value} mm`);
   }
 
   @HostListener("document:keydown.escape")
@@ -726,44 +805,89 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
   // AI 生成相关
   // ══════════════════════════════════════════════════════════════
 
+  // ══════════════════════════════════════════════════════════════
+  // 统一操作日志系统
+  // ══════════════════════════════════════════════════════════════
+
+  private static readonly MAX_OPERATION_LOGS = 150;
+  private logScrollPending = false;
+
+  operationLogs: OperationLogItem[] = [];
+
+  // AI 生成相关状态（保留用于进度显示）
   aiProgress = 0;
   aiPhaseText = "";
   aiTotalTokens = 0;
-  aiLogMessages: Array<{
-    time: string;
-    percent: number;
-    message: string;
-    highlight?: boolean;
-  }> = [];
+
+  // 参数日志去抖 Subject
+  private parameterLogSubject = new Subject<{ field: string; value: string | number }>();
+  private parameterLogSubscription?: Subscription;
 
   /**
-   * 添加日志条目并自动滚动到底部
+   * 统一操作日志入口
    *
    * @param message 日志消息
-   * @param percent 当前进度百分比
-   * @param highlight 是否高亮显示（用于重要节点）
+   * @param type 日志类型
+   * @param options 可选配置
    */
-  private addLog(message: string, percent: number, highlight = false): void {
+  private addOperationLog(
+    message: string,
+    type: OperationLogType,
+    options: {
+      status?: OperationLogStatus;
+      percent?: number;
+      highlight?: boolean;
+    } = {}
+  ): void {
     const now = new Date();
     const time = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
 
-    this.aiLogMessages.push({ time, percent, message, highlight });
+    this.operationLogs.push({
+      time,
+      type,
+      message,
+      status: options.status || 'info',
+      percent: options.percent,
+      highlight: options.highlight || false,
+    });
+
+    // 日志上限保护
+    if (this.operationLogs.length > PrintWorkspaceComponent.MAX_OPERATION_LOGS) {
+      this.operationLogs.shift();
+    }
+
     this.cdr.detectChanges();
 
-    // 延迟滚动确保 DOM 已更新
-    setTimeout(() => {
-      const element = this.aiLogContent?.nativeElement;
-      if (element) {
-        element.scrollTop = element.scrollHeight;
-      }
-    }, 50);
+    // 节流滚动：只在没有待处理滚动时才调度
+    if (!this.logScrollPending) {
+      this.logScrollPending = true;
+      requestAnimationFrame(() => {
+        const element = this.aiLogContent?.nativeElement;
+        if (element) {
+          element.scrollTop = element.scrollHeight;
+        }
+        this.logScrollPending = false;
+      });
+    }
+  }
+
+  private queueParameterLog(field: string, value: string | number): void {
+    this.parameterLogSubject.next({ field, value });
+  }
+
+  /**
+   * 添加日志条目并自动滚动到底部（兼容旧代码）
+   */
+  private addLog(message: string, percent: number, highlight = false): void {
+    this.addOperationLog(message, 'ai', { percent, highlight });
   }
 
   /**
    * 清空日志记录
    */
   clearLogs(): void {
-    this.aiLogMessages = [];
+    this.operationLogs = [];
+    this.logScrollPending = false;
   }
 
   /**
@@ -783,7 +907,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     this.aiProgressText = "AI 生成中...";
     this.aiPhaseText = "准备中";
     this.aiTotalTokens = 0;
-    this.aiLogMessages = [];
+    this.addOperationLog('—— 开始新的 AI 生成任务 ——', 'ai', { status: 'info', highlight: true });
     this.addLog("开始AI生成任务...", 0, true);
 
     const ws = this.workspace;
@@ -1129,7 +1253,11 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     }
 
     this.spreadHistory = history
-      .filter((item): item is AiCropHistoryItem => !!item?.spread_filename)
+      .filter((item): item is AiCropHistoryItem => {
+        if (!item?.spread_filename) return false;
+        if (this.deletedSpreadHistoryFilenames.has(item.spread_filename)) return false;
+        return true;
+      })
       .map((item) => this.buildSpreadPreview(item));
   }
 
@@ -1168,7 +1296,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       this.spreadPreview = this.buildSpreadPreview(draft);
       this.aiCropVisible = true;
     }
-    this.addLog('📝 已打开缓存的展开图草稿', 100, true);
+    this.addOperationLog('已打开缓存的展开图草稿', 'crop', { status: 'warning', highlight: true });
     return true;
   }
 
@@ -1182,6 +1310,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       return;
     }
 
+    this.addOperationLog('已打开 AI 裁切工作台', 'crop', { status: 'info', highlight: true });
     this.syncSpreadHistoryFromWorkspace(ws);
 
     if (this.tryOpenDraftPreview(ws)) {
@@ -1225,8 +1354,8 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     this.aiProgress = 0;
     this.aiProgressText = '生成展开图中...';
     this.aiPhaseText = '准备中';
-    this.aiLogMessages = [];
-    this.addLog('开始生成新的 Gemini 展开图...', 0, true);
+    this.addOperationLog('—— 开始新的展开图生成任务 ——', 'ai', { status: 'info', highlight: true });
+    this.addOperationLog('开始生成新的 Gemini 展开图', 'ai', { percent: 0, highlight: true });
 
     const request = {
       trimSize: ws.trim_size,
@@ -1241,7 +1370,11 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
         this.aiGenerating = false;
         this.aiProgress = 100;
         this.aiPhaseText = '✅ 展开图生成完成';
-        this.addLog('✅ 展开图生成成功，打开裁切窗口', 100, true);
+        this.addOperationLog('展开图生成成功，已打开裁切窗口', 'ai', {
+          status: 'success',
+          percent: 100,
+          highlight: true,
+        });
 
         if (result.workspace) {
           this.workspaceState.setWorkspace(result.workspace);
@@ -1267,10 +1400,20 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       error: (err) => {
         this.aiGenerating = false;
         this.aiLastResult = 'error';
+
+        const backendDetail = err.error?.detail;
+        const structuredMessage = typeof backendDetail === 'object' ? backendDetail?.message : '';
+        const fallbackMessage = err.error?.error || backendDetail || '生成失败';
+
         this.aiErrorMsg = err.name === 'TimeoutError'
           ? '生成超时，请稍后重试'
-          : (err.error?.error || '生成失败');
-        this.addLog(`❌ 生成失败: ${this.aiErrorMsg}`, 0, true);
+          : (structuredMessage || fallbackMessage);
+
+        this.addOperationLog(`生成失败: ${this.aiErrorMsg}`, 'ai', {
+          status: 'error',
+          percent: 0,
+          highlight: true,
+        });
         console.error('Gemini 展开图生成失败', err);
       },
     });
@@ -1317,7 +1460,11 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
 
         this.aiCropVisible = false;
         this.aiLastResult = 'success';
-        this.addLog('✅ 裁切保存成功，素材已回填', 100, true);
+        this.addOperationLog('裁切保存成功，素材已回填', 'crop', {
+          status: 'success',
+          percent: 100,
+          highlight: true,
+        });
       },
       error: (err) => {
         this.cropSaving = false;
@@ -1340,10 +1487,11 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
 
     this.print.deleteAiCropHistory(this.bookId, spreadFilename).subscribe({
       next: (workspace) => {
+        this.deletedSpreadHistoryFilenames.add(spreadFilename);
         this.workspaceState.setWorkspace(workspace);
 
         if (!deletingCurrentPreview) {
-          this.addLog('🗑️ 已删除历史展开图', 100, true);
+          this.addOperationLog('已删除历史展开图', 'crop', { status: 'warning', highlight: true });
           return;
         }
 
@@ -1353,11 +1501,10 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
         if (nextItem) {
           this.spreadPreview = this.buildSpreadPreview(nextItem);
         } else {
-          this.aiCropVisible = false;
           this.spreadPreview = null;
         }
 
-        this.addLog('🗑️ 已删除历史展开图', 100, true);
+        this.addOperationLog('已删除历史展开图', 'crop', { status: 'warning', highlight: true });
       },
       error: (err) => {
         alert('删除历史展开图失败：' + (err.error?.error || '未知错误'));
@@ -1468,23 +1615,33 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
     this.resizing = true;
     this.resizeProgress = 0;
     this.resizeStage = '准备中...';
+    this.addOperationLog(`启动 ${targetSize} 格式化`, 'pdf', { status: 'info', highlight: true });
     this.addResizeLog(`启动 ${targetSize} 格式化...`);
 
     // 启动格式化任务
     this.print.resizePdf(this.bookId, targetSize).subscribe({
       next: (result) => {
         if (!result.task_id) {
+          this.addOperationLog('格式化任务启动失败', 'pdf', { status: 'error', highlight: true });
           this.addResizeLog('❌ 启动失败');
           this.handleResizeError('启动格式化任务失败');
           return;
         }
 
+        this.addOperationLog(`格式化任务已创建：${result.task_id.substring(0, 8)}...`, 'pdf', {
+          status: 'info',
+          percent: 0,
+        });
         this.addResizeLog(`✓ 任务ID: ${result.task_id.substring(0, 8)}...`);
 
         // 监听进度
         this.watchResizeProgress(result.task_id);
       },
       error: (err) => {
+        this.addOperationLog(`格式化启动失败：${err.error?.error || '未知错误'}`, 'pdf', {
+          status: 'error',
+          highlight: true,
+        });
         this.addResizeLog(`❌ ${err.error?.error || '启动失败'}`);
         this.handleResizeError(err.error?.error || '启动失败');
       }
@@ -1576,6 +1733,10 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
           data.sub_stage === 'formatting_right';
 
         if (isKeyNode) {
+          this.addOperationLog(data.stage, 'pdf', {
+            status: 'info',
+            percent: data.progress,
+          });
           this.addResizeLog(`⏳ ${data.stage}`);
         }
 
@@ -1589,17 +1750,37 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
 
           if (data.skipped) {
             // 已是目标尺寸，跳过处理
+            this.addOperationLog('PDF 已是目标尺寸，跳过格式化', 'pdf', {
+              status: 'warning',
+              percent: 100,
+              highlight: true,
+            });
             this.addResizeLog('✓ 已是目标尺寸，跳过处理');
             this.saveResizeLogs(); // 保存日志
             alert(data.message || 'PDF已经是目标尺寸，无需格式化');
           } else {
             // 格式化成功
+            this.addOperationLog('PDF 格式化完成', 'pdf', {
+              status: 'success',
+              percent: 100,
+              highlight: true,
+            });
             this.addResizeLog('✅ 格式化完成');
             if (data.new_size) {
+              this.addOperationLog(
+                `新尺寸：${data.new_size.width_mm}×${data.new_size.height_mm} mm`,
+                'pdf',
+                { status: 'success', percent: 100 }
+              );
               this.addResizeLog(`📐 新尺寸: ${data.new_size.width_mm}×${data.new_size.height_mm}mm`);
             }
             // 输出统计摘要
             const errStr = this.resizeErrorCount > 0 ? ` | ❌错误 ${this.resizeErrorCount}` : '';
+            this.addOperationLog(
+              `统计：双页 ${this.resizeDoubleCount}｜单页 ${this.resizeSingleCount}${this.resizeErrorCount > 0 ? `｜错误 ${this.resizeErrorCount}` : ''}`,
+              'pdf',
+              { status: this.resizeErrorCount > 0 ? 'warning' : 'success', percent: 100 }
+            );
             this.addResizeLog(`📊 统计: ✂️双页 ${this.resizeDoubleCount} | 📄单页 ${this.resizeSingleCount}${errStr}`);
 
             // 保存日志到 localStorage
@@ -1627,6 +1808,11 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
           const shortError = errorMsg.includes('第')
             ? errorMsg.split('详细信息')[0].trim()
             : errorMsg;
+          this.addOperationLog(`PDF 格式化失败：${shortError}`, 'pdf', {
+            status: 'error',
+            percent: data.progress,
+            highlight: true,
+          });
           this.addResizeLog(`❌ 处理失败: ${shortError}`);
           this.handleResizeError(errorMsg);
         }
@@ -1635,6 +1821,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
       } catch (e) {
         // JSON 解析失败，记录错误但不中断连接
         console.error('SSE数据解析失败:', e);
+        this.addOperationLog('PDF 格式化进度数据解析异常', 'pdf', { status: 'warning' });
         this.addResizeLog('⚠️ 数据解析异常');
         this.cdr.detectChanges();
       }
@@ -1646,6 +1833,7 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
         es.close();
         // 只有在任务未完成时才报告连接中断
         if (this.resizing) {
+          this.addOperationLog('PDF 格式化 SSE 连接中断', 'pdf', { status: 'error', highlight: true });
           this.addResizeLog('❌ SSE连接中断');
           this.handleResizeError('与服务器的连接已断开');
         }

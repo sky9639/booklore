@@ -1,5 +1,5 @@
 <!-- Gemini AI 配置弹窗 V2.0 -->
-<div class="dialog-overlay" *ngIf="visible" (click)="onCancel()">
+<div class="dialog-overlay" *ngIf="visible">
   <div class="dialog" (click)="$event.stopPropagation()">
     <!-- 顶部标题栏 -->
     <div class="tabs-row">
@@ -108,20 +108,24 @@
               />
             </div>
             <div class="form-group half">
-              <label>AI 参考图最大长边（像素）</label>
-              <input
-                type="number"
-                [(ngModel)]="profileFormData.imageMaxSend"
-                min="512"
-                max="4096"
+              <label>输出分辨率</label>
+              <select
+                [(ngModel)]="profileFormData.imageSize"
                 class="input-field"
-              />
-              <div class="field-tip">值越大细节越清晰，但请求会稍慢。仅影响发送给 AI 的封面压缩尺寸。</div>
+                [disabled]="!isImageSizeSelectable"
+              >
+                <option value="1K">1K</option>
+                <option value="2K">2K（默认推荐）</option>
+                <option value="4K">4K</option>
+              </select>
+              <div class="field-tip">
+                仅当测试连接成功且当前模型/网关确认支持 imageSize 后才可选择；3.1 推荐默认 2K，4K 成本更高。
+              </div>
             </div>
           </div>
 
           <div class="action-row">
-            <button class="secondary-btn" (click)="testConnection()" [disabled]="testing">
+            <button class="primary-btn" (click)="testConnection()" [disabled]="testing">
               {{ testing ? '测试中...' : '测试连接' }}
             </button>
             <span class="inline-status" [class.success]="testResult.includes('✅')" [class.error]="testResult.includes('❌')">

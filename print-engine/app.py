@@ -137,7 +137,10 @@ class AiProfileModel(BaseModel):
     apiKey: str
     model: str
     timeout: int = 240
-    imageMaxSend: int = 1024
+    imageSize: Optional[str] = "2K"
+    imageSizeSupported: Optional[bool] = None
+    imageSizeDetectionStatus: Optional[str] = "unknown"
+    imageSizeDetectionFingerprint: Optional[str] = None
 
 
 class AiRuntimeConfigRequest(BaseModel):
@@ -1075,16 +1078,24 @@ def ai_generate_spread(request: AiGenerateRequest):
     print_root = get_print_root(request.book_path)
     trim_size = request.trim_size or ws.get("trim_size", "A5")
     spine_width_mm = request.spine_width_mm or ws.get("spine_width_mm", 4.74)
+    book_title = request.book_title or ws.get("book_name", "")
 
     try:
         result = generate_spread_preview(
             print_root=print_root,
             cover_filename=cover_selected,
-            book_title=request.book_title or ws.get("book_name", ""),
+            book_title=book_title,
             trim_size=trim_size,
             spine_width_mm=spine_width_mm,
             template_id=request.template_id,
         )
+
+        latest_ws = load_workspace(request.book_path)
+        if not latest_ws:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+
+        ws = upgrade_workspace_schema(latest_ws, request)
+        cover_selected = ws.get("cover", {}).get("selected") or cover_selected
 
         draft_item = {
             "spread_filename": result.get("spread_filename"),
@@ -1106,6 +1117,13 @@ def ai_generate_spread(request: AiGenerateRequest):
         result["workspace"] = ws
         return result
     except Exception as e:
+        error_str = str(e)
+        if "::" in error_str:
+            error_type, error_message = error_str.split("::", 1)
+            raise HTTPException(
+                status_code=400,
+                detail={"errorType": error_type, "message": error_message}
+            )
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -1127,17 +1145,26 @@ def ai_generate_crop(request: AiCropSaveRequest):
 
     ws = upgrade_workspace_schema(ws, request)
     print_root = get_print_root(request.book_path)
+    trim_size = ws.get("trim_size", "A5")
+    spine_width_mm = ws.get("spine_width_mm", 4.74)
+    source_cover_filename = ws.get("cover", {}).get("selected")
 
     try:
         result = save_cropped_materials(
             print_root=print_root,
             spread_filename=request.spread_filename,
-            trim_size=ws.get("trim_size", "A5"),
-            spine_width_mm=ws.get("spine_width_mm", 4.74),
+            trim_size=trim_size,
+            spine_width_mm=spine_width_mm,
             vertical_lines=request.vertical_lines,
             horizontal_lines=request.horizontal_lines,
+            source_cover_filename=source_cover_filename,
         )
 
+        latest_ws = load_workspace(request.book_path)
+        if not latest_ws:
+            raise HTTPException(status_code=404, detail="Workspace not found")
+
+        ws = upgrade_workspace_schema(latest_ws, request)
         update_history(ws, "back", result["back_filename"])
         update_history(ws, "spine", result["spine_filename"])
         update_history(ws, "front_output", result["front_filename"])
@@ -1158,7 +1185,7 @@ def ai_generate_crop(request: AiCropSaveRequest):
             "spread_filename": request.spread_filename,
             "spread_size": spread_size,
             "crop_lines": result["crop_lines"],
-            "source_cover_filename": existing_history_item.get("source_cover_filename") or draft_item.get("source_cover_filename"),
+            "source_cover_filename": existing_history_item.get("source_cover_filename") or draft_item.get("source_cover_filename") or source_cover_filename,
             "trim_size": existing_history_item.get("trim_size") or ws.get("trim_size", "A5"),
             "spine_width_mm": existing_history_item.get("spine_width_mm") or ws.get("spine_width_mm", 4.74),
             "updated_at": datetime.utcnow().isoformat(),

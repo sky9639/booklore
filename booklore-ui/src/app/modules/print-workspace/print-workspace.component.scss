@@ -824,7 +824,6 @@ Booklore Print Workspace
 
 /* 书脊页顶部：只显示数值，无箭头横线 */
 .ruler-h.ruler-h-spine-only {
-  margin-left: 44px;
   height: 20px;
   display: flex;
   align-items: center;
@@ -839,10 +838,9 @@ Booklore Print Workspace
 
 /* =========================================================
    水平标尺（顶部）
-   margin-left 与 ruler-v 宽度相同，使标尺箭头与图片左边线对齐
+   与图片左右边缘对齐
 ========================================================= */
 .ruler-h {
-  margin-left: 44px;
   height: 20px;
   display: flex;
   align-items: center;
@@ -892,19 +890,19 @@ Booklore Print Workspace
 }
 
 /* =========================================================
-   图片行：左侧垂直标尺 + 预览图
+   图片行：预览图 + 右侧垂直标尺
 ========================================================= */
 .preview-image-row {
   display: flex;
   align-items: stretch;
-  gap: 0;
+  gap: 8px;
 }
 
 /* =========================================================
-   [问题3] 垂直标尺（左侧）— 宽度加大，数值不被裁切
+   垂直标尺（右侧）— 只在最后一页显示
 ========================================================= */
 .ruler-v {
-  width: 44px; /* 20px → 44px，数值有足够空间 */
+  width: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -956,7 +954,7 @@ Booklore Print Workspace
    预览图本体
 ========================================================= */
 .preview-box.large {
-  background: #0f1520;
+  background: transparent; /* 移除深色背景，直接显示灰色容器背景 */
   border: none;
   border-radius: 4px;
   overflow: hidden;
@@ -1456,6 +1454,22 @@ Booklore Print Workspace
 
   &:hover {
     background: rgba(148, 163, 184, 0.05);
+  }
+
+  &[data-status='success'] {
+    color: #86efac;
+  }
+
+  &[data-status='warning'] {
+    color: #fcd34d;
+  }
+
+  &[data-status='error'] {
+    color: #fca5a5;
+  }
+
+  &[data-status='info'] {
+    color: #cbd5e1;
   }
 
   &.ai-log-highlight {

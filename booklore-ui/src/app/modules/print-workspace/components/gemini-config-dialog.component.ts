@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Input, Output, OnInit, OnChanges, HostListener, ViewChildren, QueryList, ElementRef, AfterViewChecked } from '@angular/core';
+import { Component, EventEmitter, Input, Output, OnInit, OnChanges, HostListener, ViewChildren, QueryList, ElementRef, AfterViewChecked, SimpleChanges } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { CommonModule } from '@angular/common';
 
@@ -28,7 +28,10 @@ interface Profile {
   apiKey: string;
   model: string;
   timeout: number;
-  imageMaxSend: number;
+  imageSize?: '1K' | '2K' | '4K';
+  imageSizeSupported?: boolean | null;
+  imageSizeDetectionStatus?: 'unknown' | 'supported' | 'unsupported' | 'stale';
+  imageSizeDetectionFingerprint?: string | null;
 }
 
 /** 提示词模板模型 */
@@ -82,12 +85,25 @@ export class GeminiConfigDialogComponent implements OnInit, OnChanges, AfterView
   saving = false;
   statusMessage = ''; // 底部状态栏消息
 
+  // ── 脏检测状态 ──────────────────────────────────────────
+  private initialSnapshot: string = ''; // 初始配置快照
+  private testRequestSeq = 0;
+
   ngOnInit(): void {
     this.loadConfig();
+    this.captureInitialSnapshot();
   }
 
-  ngOnChanges(): void {
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes['visible'] && !changes['visible'].currentValue) {
+      this.resetTransientState();
+    }
+
     this.loadConfig();
+    if (changes['visible']?.currentValue && !changes['visible']?.previousValue) {
+      this.resetTransientState();
+      this.captureInitialSnapshot();
+    }
   }
 
   ngAfterViewChecked(): void {
@@ -201,14 +217,38 @@ export class GeminiConfigDialogComponent implements OnInit, OnChanges, AfterView
     if (this.profileFormData && this.activeProfileId) {
       const profile = this.profiles.find(p => p.id === this.activeProfileId);
       if (profile) {
+        const oldFingerprint = this.buildCapabilityFingerprint(profile);
+
         profile.baseUrl = this.profileFormData.baseUrl;
         profile.apiPath = this.profileFormData.apiPath;
         profile.apiKey = this.profileFormData.apiKey;
         profile.model = this.profileFormData.model;
         profile.timeout = this.profileFormData.timeout;
-        profile.imageMaxSend = this.profileFormData.imageMaxSend;
+        profile.imageSize = this.profileFormData.imageSize;
+
+        const newFingerprint = this.buildCapabilityFingerprint(profile);
+        if (oldFingerprint !== newFingerprint && profile.imageSizeDetectionStatus === 'supported') {
+          profile.imageSizeSupported = null;
+          profile.imageSizeDetectionStatus = 'stale';
+        }
       }
     }
+  }
+
+  /** 构建能力检测指纹 */
+  private buildCapabilityFingerprint(profile: Profile): string {
+    return `${profile.baseUrl}|${profile.apiPath}|${profile.apiKey}|${profile.model}`;
+  }
+
+  /** 判断 imageSize 是否可选 */
+  get isImageSizeSelectable(): boolean {
+    if (!this.profileFormData) return false;
+    const currentFingerprint = this.buildCapabilityFingerprint(this.profileFormData);
+    return (
+      this.profileFormData.imageSizeSupported === true &&
+      this.profileFormData.imageSizeDetectionStatus === 'supported' &&
+      this.profileFormData.imageSizeDetectionFingerprint === currentFingerprint
+    );
   }
 
   /** 新增 profile */
@@ -224,7 +264,10 @@ export class GeminiConfigDialogComponent implements OnInit, OnChanges, AfterView
       apiKey: '',
       model: 'gemini-2.5-flash-image',
       timeout: 240,
-      imageMaxSend: 2048,
+      imageSize: '2K',
+      imageSizeSupported: null,
+      imageSizeDetectionStatus: 'unknown',
+      imageSizeDetectionFingerprint: null,
     };
     this.profiles.push(newProfile);
     this.activeProfileId = newProfile.id;
@@ -308,7 +351,10 @@ export class GeminiConfigDialogComponent implements OnInit, OnChanges, AfterView
       apiKey: '',
       model: 'gemini-2.5-flash-image',
       timeout: 240,
-      imageMaxSend: 2048,
+      imageSize: '2K',
+      imageSizeSupported: null,
+      imageSizeDetectionStatus: 'unknown',
+      imageSizeDetectionFingerprint: null,
     };
   }
 
@@ -461,6 +507,46 @@ export class GeminiConfigDialogComponent implements OnInit, OnChanges, AfterView
     };
   }
 
+  /** 创建用于脏检测的配置快照 */
+  private buildSnapshot(): string {
+    this.confirmRenameProfile();
+    this.confirmRenameTemplate();
+    this.syncProfileFormToArray();
+    this.syncTemplateFormToArray();
+
+    return JSON.stringify({
+      activeProfileId: this.activeProfileId,
+      profiles: this.profiles,
+      activeTemplateId: this.activeTemplateId,
+      templates: this.templates,
+    });
+  }
+
+  /** 记录弹窗打开时的初始状态 */
+  private captureInitialSnapshot(): void {
+    this.initialSnapshot = this.buildSnapshot();
+  }
+
+  /** 是否存在未保存修改 */
+  private hasUnsavedChanges(): boolean {
+    return this.buildSnapshot() !== this.initialSnapshot;
+  }
+
+  /** 重置瞬态 UI 状态 */
+  private resetTransientState(): void {
+    this.testing = false;
+    this.testResult = '';
+    this.saving = false;
+    this.statusMessage = '';
+    this.editingProfileId = null;
+    this.editingProfileName = '';
+    this.editingTemplateId = null;
+    this.editingTemplateName = '';
+    this.needFocusProfileInput = false;
+    this.needFocusTemplateInput = false;
+    this.testRequestSeq++;
+  }
+
   /** 在模板中安全显示变量名，避免 HTML 里直接写花括号触发 Angular ICU 解析 */
   getVariableToken(name: string): string {
     return `{${name}}`;
@@ -489,6 +575,8 @@ export class GeminiConfigDialogComponent implements OnInit, OnChanges, AfterView
     this.testResult = '测试中...';
     this.statusMessage = '';
 
+    const currentSeq = ++this.testRequestSeq;
+
     // 通过父组件调用服务
     this.save.emit({
       action: 'test',
@@ -497,9 +585,34 @@ export class GeminiConfigDialogComponent implements OnInit, OnChanges, AfterView
         profiles: this.profiles,
       },
       callback: (result: any) => {
+        if (currentSeq !== this.testRequestSeq) return;
+
         this.testing = false;
         if (result.success) {
           this.testResult = '✅ 连接测试成功';
+
+          const capabilities = result.capabilities || {};
+          const imageSizeSupported = capabilities.imageSize === true;
+          const detectionFingerprint = result.detectionFingerprint || null;
+
+          if (this.profileFormData) {
+            this.profileFormData.imageSizeSupported = imageSizeSupported;
+            this.profileFormData.imageSizeDetectionStatus = imageSizeSupported ? 'supported' : 'unsupported';
+            this.profileFormData.imageSizeDetectionFingerprint = detectionFingerprint;
+          }
+
+          const profile = this.profiles.find(p => p.id === this.activeProfileId);
+          if (profile) {
+            profile.imageSizeSupported = imageSizeSupported;
+            profile.imageSizeDetectionStatus = imageSizeSupported ? 'supported' : 'unsupported';
+            profile.imageSizeDetectionFingerprint = detectionFingerprint;
+          }
+
+          if (imageSizeSupported) {
+            this.testResult += '，当前模型支持 imageSize';
+          } else {
+            this.testResult += '，但当前模型/网关不支持 imageSize';
+          }
         } else {
           // 根据错误类型显示不同提示
           const errorType = result.errorType || 'unknown';
@@ -575,6 +688,8 @@ export class GeminiConfigDialogComponent implements OnInit, OnChanges, AfterView
         this.saving = false;
         if (success) {
           this.statusMessage = '✅ 配置已保存';
+          this.captureInitialSnapshot();
+          this.close.emit();
         } else {
           this.statusMessage = '❌ 保存失败';
         }
@@ -600,6 +715,10 @@ export class GeminiConfigDialogComponent implements OnInit, OnChanges, AfterView
   // ══════════════════════════════════════════════════════════
 
   onCancel(): void {
+    if (this.hasUnsavedChanges() && !confirm('当前有未保存的 AI 配置修改，确定放弃并关闭吗？')) {
+      return;
+    }
+    this.resetTransientState();
     this.close.emit();
   }
 }

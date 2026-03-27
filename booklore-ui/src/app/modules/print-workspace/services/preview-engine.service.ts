@@ -129,8 +129,8 @@ export class PreviewEngineService {
    * preview 页面会变形
    */
   getPageRatio(ws: PrintWorkspace): string {
-    const w = this.getSheetWidth(ws);
-    const h = this.getSheetHeight(ws);
+    const w = this.getPageWidth(ws);
+    const h = this.getPageHeight(ws);
     return `${w}/${h}`;
   }
 }

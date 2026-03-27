@@ -1,15 +1,25 @@
 {
-  "activeProfileId": "profile_1774092221720",
+  "activeProfileId": "profile_1774611806692",
   "profiles": [
     {
-      "id": "profile_1774092221720",
-      "name": "302Ai",
+      "id": "profile_1774611806692",
+      "name": "302AI",
       "baseUrl": "https://api.302.ai",
-      "apiPath": "/google/v1/models/{model}",
+      "apiPath": "/v1beta/models/{model}:generateContent",
       "apiKey": "sk-L6IHFEiGAVAJqX6FM8RrlboM8J9xTxhUBpOqOYfg1SdbQCij",
-      "model": "gemini-2.5-flash-image",
+      "model": "gemini-2.5-flash-image-preview",
       "timeout": 240,
       "imageMaxSend": 2048
+    },
+    {
+      "id": "profile_1774614844979",
+      "name": "鲨鱼魔法API",
+      "baseUrl": "https://openai.sharkmagic.top/",
+      "apiPath": "/v1beta/models/{model}:generateContent",
+      "apiKey": "sk-4nE8CZPrmlbkBk9WlDaE7gWshrTjKn5ouAadFgxq7jF8uZGe",
+      "model": "[lq-10]gemini-2.5-flash-image",
+      "timeout": 240,
+      "imageMaxSend": 1024
     }
   ]
 }
