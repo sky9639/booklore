@@ -2,6 +2,7 @@ import os
 import threading
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 import requests
 from cover_extractor import *
