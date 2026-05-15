@@ -1,5 +1,5 @@
 {
-  "activeProfileId": "profile_1774611806692",
+  "activeProfileId": "profile_1774614844979",
   "profiles": [
     {
       "id": "profile_1774611806692",
@@ -17,7 +17,7 @@
       "baseUrl": "https://openai.sharkmagic.top/",
       "apiPath": "/v1beta/models/{model}:generateContent",
       "apiKey": "sk-4nE8CZPrmlbkBk9WlDaE7gWshrTjKn5ouAadFgxq7jF8uZGe",
-      "model": "[lq-10]gemini-2.5-flash-image",
+      "model": "[lq]q|gemini-3.1-flash-image-preview",
       "timeout": 240,
       "imageMaxSend": 1024
     }
