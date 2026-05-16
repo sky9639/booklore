@@ -26,6 +26,7 @@ import {Location} from '@angular/common';
 })
 export class PdfReaderComponent implements OnInit, OnDestroy {
   constructor() {
+    pdfDefaultOptions.assetsFolder = 'assets';
     pdfDefaultOptions.rangeChunkSize = 512 * 1024;
     pdfDefaultOptions.disableAutoFetch = true;
   }

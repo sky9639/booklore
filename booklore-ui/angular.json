@@ -42,6 +42,11 @@
                 "glob": "**/*",
                 "input": "libs/foliate-js",
                 "output": "/assets/foliate/"
+              },
+              {
+                "glob": "**/*",
+                "input": "node_modules/ngx-extended-pdf-viewer/assets",
+                "output": "/assets/"
               }
             ],
             "styles": [

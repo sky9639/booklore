@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.booklore.model.entity.BookEntity;
+import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookRepository;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.core.io.Resource;
@@ -58,7 +59,7 @@ public class PrintContentController {
                 .findById(bookId)
                 .orElseThrow(() -> new RuntimeException("Book not found: " + bookId));
 
-            Path fullPath = book.getFullFilePath();
+            Path fullPath = book.getFullFilePath(BookFileType.PDF);
             if (fullPath == null) {
                 log.warn("Book {} has no file path", bookId);
                 return ResponseEntity.notFound().build();
@@ -129,7 +130,7 @@ public class PrintContentController {
                 .findById(bookId)
                 .orElseThrow(() -> new RuntimeException("Book not found: " + bookId));
 
-            Path fullPath = book.getFullFilePath();
+            Path fullPath = book.getFullFilePath(BookFileType.PDF);
             if (fullPath == null) {
                 log.warn("Book {} has no file path", bookId);
                 return ResponseEntity.notFound().build();

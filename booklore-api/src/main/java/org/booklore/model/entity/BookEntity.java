@@ -91,12 +91,33 @@ public class BookEntity {
     private List<UserBookProgressEntity> userBookProgress;
 
     public Path getFullFilePath() {
-        BookFileEntity primaryBookFile = getPrimaryBookFile();
-        if (primaryBookFile == null || libraryPath == null || libraryPath.getPath() == null || primaryBookFile.getFileSubPath() == null || primaryBookFile.getFileName() == null) {
+        return getFullFilePath(getPrimaryBookFile());
+    }
+
+    public Path getFullFilePath(BookFileType bookFileType) {
+        return getFullFilePath(getBookFile(bookFileType));
+    }
+
+    public Path getFullFilePath(BookFileEntity bookFile) {
+        if (bookFile == null || libraryPath == null || libraryPath.getPath() == null || bookFile.getFileSubPath() == null || bookFile.getFileName() == null) {
             return null;
         }
 
-        return Paths.get(libraryPath.getPath(), primaryBookFile.getFileSubPath(), primaryBookFile.getFileName());
+        return Paths.get(libraryPath.getPath(), bookFile.getFileSubPath(), bookFile.getFileName());
+    }
+
+    public BookFileEntity getBookFile(BookFileType bookFileType) {
+        if (bookFiles == null) {
+            bookFiles = new ArrayList<>();
+        }
+        if (bookFiles.isEmpty()) {
+            return null;
+        }
+
+        return bookFiles.stream()
+            .filter(bf -> bf.isBookFormat() && bf.getBookType() == bookFileType)
+            .findFirst()
+            .orElse(null);
     }
 
     public BookFileEntity getPrimaryBookFile() {

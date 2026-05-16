@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.booklore.model.entity.BookEntity;
+import org.booklore.model.enums.BookFileType;
 import org.booklore.print.dto.PrintRequest;
 import org.booklore.repository.BookRepository;
 import org.springframework.core.io.InputStreamResource;
@@ -41,10 +42,10 @@ public class PrintController {
             .findById(bookId)
             .orElseThrow(() -> new RuntimeException("Book not found"));
 
-        Path fullPath = book.getFullFilePath();
+        Path fullPath = book.getFullFilePath(BookFileType.PDF);
         if (fullPath == null) {
             return ResponseEntity.badRequest().body(
-                Map.of("error", "Book file path could not be resolved")
+                Map.of("error", "Book PDF file path could not be resolved")
             );
         }
 
@@ -79,10 +80,10 @@ public class PrintController {
                 .findById(bookId)
                 .orElseThrow(() -> new RuntimeException("Book not found"));
 
-            Path fullPath = book.getFullFilePath();
+            Path fullPath = book.getFullFilePath(BookFileType.PDF);
             if (fullPath == null) {
                 return ResponseEntity.badRequest().body(
-                    Map.of("error", "Book file path could not be resolved")
+                    Map.of("error", "Book PDF file path could not be resolved")
                 );
             }
 
@@ -122,10 +123,10 @@ public class PrintController {
             .findById(bookId)
             .orElseThrow(() -> new RuntimeException("Book not found"));
 
-        Path fullPath = book.getFullFilePath();
+        Path fullPath = book.getFullFilePath(BookFileType.PDF);
         if (fullPath == null) {
             return ResponseEntity.badRequest().body(
-                Map.of("error", "Book file path could not be resolved")
+                Map.of("error", "Book PDF file path could not be resolved")
             );
         }
 
@@ -159,10 +160,10 @@ public class PrintController {
             .findById(bookId)
             .orElseThrow(() -> new RuntimeException("Book not found"));
 
-        Path fullPath = book.getFullFilePath();
+        Path fullPath = book.getFullFilePath(BookFileType.PDF);
         if (fullPath == null) {
             return ResponseEntity.badRequest().body(
-                Map.of("error", "Book file path could not be resolved")
+                Map.of("error", "Book PDF file path could not be resolved")
             );
         }
 
@@ -229,7 +230,7 @@ public class PrintController {
                 .findById(bookId)
                 .orElseThrow(() -> new RuntimeException("Book not found"));
 
-            Path fullPath = book.getFullFilePath();
+            Path fullPath = book.getFullFilePath(BookFileType.PDF);
             if (fullPath == null) return ResponseEntity.notFound().build();
 
             PdfFileInfo pdfInfo = resolvePdfPath(fullPath);
@@ -269,7 +270,7 @@ public class PrintController {
                 .findById(bookId)
                 .orElseThrow(() -> new RuntimeException("Book not found"));
 
-            Path fullPath = book.getFullFilePath();
+            Path fullPath = book.getFullFilePath(BookFileType.PDF);
             if (fullPath == null) return ResponseEntity.notFound().build();
 
             PdfFileInfo pdfInfo = resolvePdfPath(fullPath);
@@ -310,7 +311,7 @@ public class PrintController {
                 .findById(bookId)
                 .orElseThrow(() -> new RuntimeException("Book not found"));
 
-            Path fullPath = book.getFullFilePath();
+            Path fullPath = book.getFullFilePath(BookFileType.PDF);
             if (fullPath == null) return ResponseEntity.notFound().build();
 
             File file = fullPath
@@ -356,10 +357,10 @@ public class PrintController {
                 .findById(bookId)
                 .orElseThrow(() -> new RuntimeException("Book not found"));
 
-            Path fullPath = book.getFullFilePath();
+            Path fullPath = book.getFullFilePath(BookFileType.PDF);
             if (fullPath == null) {
                 return ResponseEntity.badRequest().body(
-                    Map.of("error", "Book file path could not be resolved")
+                    Map.of("error", "Book PDF file path could not be resolved")
                 );
             }
 
@@ -402,10 +403,10 @@ public class PrintController {
                 .findById(bookId)
                 .orElseThrow(() -> new RuntimeException("Book not found"));
 
-            Path fullPath = book.getFullFilePath();
+            Path fullPath = book.getFullFilePath(BookFileType.PDF);
             if (fullPath == null) {
                 return ResponseEntity.badRequest().body(
-                    Map.of("error", "Book file path could not be resolved")
+                    Map.of("error", "Book PDF file path could not be resolved")
                 );
             }
 
@@ -432,10 +433,10 @@ public class PrintController {
                 .findById(bookId)
                 .orElseThrow(() -> new RuntimeException("Book not found"));
 
-            Path fullPath = book.getFullFilePath();
+            Path fullPath = book.getFullFilePath(BookFileType.PDF);
             if (fullPath == null) {
                 return ResponseEntity.badRequest().body(
-                    Map.of("error", "Book file path could not be resolved")
+                    Map.of("error", "Book PDF file path could not be resolved")
                 );
             }
 
@@ -498,10 +499,10 @@ public class PrintController {
                 .findById(bookId)
                 .orElseThrow(() -> new RuntimeException("Book not found"));
 
-            Path fullPath = book.getFullFilePath();
+            Path fullPath = book.getFullFilePath(BookFileType.PDF);
             if (fullPath == null) {
                 return ResponseEntity.badRequest().body(
-                    Map.of("error", "Book file path could not be resolved")
+                    Map.of("error", "Book PDF file path could not be resolved")
                 );
             }
 
@@ -553,10 +554,10 @@ public class PrintController {
                 .findById(bookId)
                 .orElseThrow(() -> new RuntimeException("Book not found"));
 
-            Path fullPath = book.getFullFilePath();
+            Path fullPath = book.getFullFilePath(BookFileType.PDF);
             if (fullPath == null) {
                 return ResponseEntity.badRequest().body(
-                    Map.of("error", "Book file path could not be resolved")
+                    Map.of("error", "Book PDF file path could not be resolved")
                 );
             }
 
@@ -585,10 +586,10 @@ public class PrintController {
                 .findById(bookId)
                 .orElseThrow(() -> new RuntimeException("Book not found"));
 
-            Path fullPath = book.getFullFilePath();
+            Path fullPath = book.getFullFilePath(BookFileType.PDF);
             if (fullPath == null) {
                 return ResponseEntity.badRequest().body(
-                    Map.of("error", "Book file path could not be resolved")
+                    Map.of("error", "Book PDF file path could not be resolved")
                 );
             }
 
@@ -614,10 +615,10 @@ public class PrintController {
                 .findById(bookId)
                 .orElseThrow(() -> new RuntimeException("Book not found"));
 
-            Path fullPath = book.getFullFilePath();
+            Path fullPath = book.getFullFilePath(BookFileType.PDF);
             if (fullPath == null) {
                 return ResponseEntity.badRequest().body(
-                    Map.of("error", "Book file path could not be resolved")
+                    Map.of("error", "Book PDF file path could not be resolved")
                 );
             }
 
@@ -724,10 +725,10 @@ public class PrintController {
                 .findById(bookId)
                 .orElseThrow(() -> new RuntimeException("Book not found"));
 
-            Path fullPath = book.getFullFilePath();
+            Path fullPath = book.getFullFilePath(BookFileType.PDF);
             if (fullPath == null) {
                 return ResponseEntity.badRequest().body(
-                    Map.of("error", "Book file path could not be resolved")
+                    Map.of("error", "Book PDF file path could not be resolved")
                 );
             }
 
@@ -891,10 +892,10 @@ public class PrintController {
             .findById(bookId)
             .orElseThrow(() -> new RuntimeException("Book not found"));
 
-        Path fullPath = book.getFullFilePath();
+        Path fullPath = book.getFullFilePath(BookFileType.PDF);
         if (fullPath == null) {
             return ResponseEntity.badRequest().body(
-                Map.of("error", "Book file path could not be resolved")
+                Map.of("error", "Book PDF file path could not be resolved")
             );
         }
 
@@ -920,10 +921,10 @@ public class PrintController {
             .findById(bookId)
             .orElseThrow(() -> new RuntimeException("Book not found"));
 
-        Path fullPath = book.getFullFilePath();
+        Path fullPath = book.getFullFilePath(BookFileType.PDF);
         if (fullPath == null) {
             return ResponseEntity.badRequest().body(
-                Map.of("error", "Book file path could not be resolved")
+                Map.of("error", "Book PDF file path could not be resolved")
             );
         }
 
