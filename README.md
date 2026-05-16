@@ -1,5 +1,15 @@
 # Booklore 工程说明
 
+## 最近更新（2026-05-16）
+
+### PDF 打印预览修复与阅读器资源补全
+- ✅ **打印预览只解析 PDF 文件**：后端为 `BookEntity` 增加按 `BookFileType` 定位文件的能力，`print` / `source-print` 相关接口统一改为显式读取 PDF 文件，避免主文件不是 PDF 时预览取错源文件
+- ✅ **source-print 预览链路修复**：修复新上传图书在格式化后无法通过 `pdf-reader/source-print/:bookId` 打开原始 PDF 预览的问题
+- ✅ **拼版工作台 PDF 接口收敛**：`workspace/init`、预览、生成、下载、`pdf/info`、`pdf/resize/start` 等打印工作台接口统一基于 PDF 文件路径处理，减少同类问题在其他入口重复出现
+- ✅ **前端 PDF 阅读器静态资源补全**：Angular `assets` 增加 `ngx-extended-pdf-viewer` 资源映射，并显式设置 `pdfDefaultOptions.assetsFolder = 'assets'`，修复开发服务下缺失 worker、viewer、cmaps、standard_fonts、wasm 资源导致的白屏或加载失败
+
+---
+
 ## 最近更新（2026-03-28）
 
 ### 拼版工作台日志中心化与 Gemini 配置链路增强
