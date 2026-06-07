@@ -31,7 +31,7 @@ import os
 import shutil
 import logging
 from datetime import datetime
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, Any
 
 try:
     import fitz  # PyMuPDF
@@ -68,10 +68,16 @@ SIZE_TOLERANCE = 2.0
 MARGIN_THRESHOLD = 5.0
 
 # 双页检测阈值
-ASPECT_RATIO_MIN = 1.30  # 宽高比小于此值直接判定为单页
-ASPECT_RATIO_STRONG = 1.34  # 宽高比大于此值即使无明显中缝也判定为双页
 CENTER_WIDTH_RATIO = 0.10  # 中间区域宽度占比
 BRIGHTNESS_THRESHOLD = 1.15  # 中间/两侧亮度比阈值
+
+# 文档级基线检测参数
+BASELINE_WIDTH_TOLERANCE = 0.15  # 宽度聚类容差（±15%）
+BASELINE_HEIGHT_TOLERANCE = 0.15  # 高度聚类容差（±15%）
+WIDE_PAGE_RATIO_MIN = 1.7  # 双页候选最小宽度倍数（放宽到1.7x）
+WIDE_PAGE_RATIO_MAX = 4.0  # 双页候选最大宽度倍数（放宽到4.0x）
+HEIGHT_MATCH_TOLERANCE = 0.20  # 高度匹配容差（±20%）
+LANDSCAPE_DOC_THRESHOLD = 0.4  # 景观文档阈值（>40%页面为宽页时判定为横向文档）
 
 
 class PdfResizer:
@@ -113,6 +119,11 @@ class PdfResizer:
         self.target_size = target_size.upper()
         self.progress_callback = progress_callback
         self.backup_path = None
+
+        # 文档级基线（在第一次扫描时计算）
+        self.baseline_width = None  # 主流单页宽度
+        self.baseline_height = None  # 主流单页高度
+        self.is_landscape_doc = False  # 是否为横向文档
 
         # 构建PDF路径（兼容有无.pdf后缀）
         if book_path.lower().endswith(".pdf"):
@@ -267,6 +278,20 @@ class PdfResizer:
         src_doc = fitz.open(self.pdf_path)
         total_pages = len(src_doc)
 
+        # 预扫描：计算文档级单页基线（用于泛化性双页检测）
+        profile = self._build_document_profile(src_doc)
+        self.baseline_width = profile.get("baseline_width")
+        self.baseline_height = profile.get("baseline_height")
+        self.is_landscape_doc = profile.get("is_landscape_doc", False)
+
+        logger.info(
+            "文档基线检测：baseline_w=%s pt, baseline_h=%s pt, wide_ratio=%.2f, is_landscape_doc=%s",
+            self.baseline_width,
+            self.baseline_height,
+            profile.get("wide_page_ratio", 0.0),
+            self.is_landscape_doc,
+        )
+
         # 创建新文档
         dst_doc = fitz.open()
 
@@ -335,6 +360,7 @@ class PdfResizer:
                     # === 双页处理 ===
                     logger.info(
                         f"[{page_num_display}/{total_pages}] ✂️ 双页 | "
+                        f"宽度比={detection_result.get('width_ratio', 0):.2f} | "
                         f"宽高比={detection_result['aspect_ratio']:.3f} | "
                         f"亮度比={detection_result['brightness_ratio']:.3f} | "
                         f"{detection_result['reason']}"
@@ -522,30 +548,117 @@ class PdfResizer:
             "error_count": error_count,
         }
 
+    def _build_document_profile(self, doc: fitz.Document) -> Dict[str, Any]:
+        """
+        文档级预扫描：基于页面主图宽度计算主流单页基线
+
+        说明：
+        - 使用每页主图（优先嵌入图）的实际宽度聚类
+        - 避免 PDF 页框尺寸（如 Letter/A4 默认框）误导基线
+        - 双页通常是两页拼在一起，主图宽度约为单页的 2x
+        - 横向书保护：超过 40% 页面宽度 > 基线 x 1.7 时，判定为横向文档
+        """
+        if not HAS_IMAGE_LIBS:
+            return {
+                "baseline_width": None,
+                "baseline_height": None,
+                "wide_page_ratio": 0.0,
+                "is_landscape_doc": False,
+            }
+
+        page_sizes = []
+        total_pages = len(doc)
+
+        # 采样：最多扫描前100页（大文档性能优化）
+        sample_size = min(100, total_pages)
+
+        for page_num in range(sample_size):
+            try:
+                page = doc[page_num]
+                page_image, _ = self._get_main_image_from_page(doc, page)
+                if page_image:
+                    w, h = page_image.size
+                    page_sizes.append({"width": w, "height": h})
+            except Exception as e:
+                logger.debug(f"预扫描页面{page_num + 1}失败: {e}")
+                continue
+
+        if not page_sizes:
+            return {
+                "baseline_width": None,
+                "baseline_height": None,
+                "wide_page_ratio": 0.0,
+                "is_landscape_doc": False,
+            }
+
+        widths = [p["width"] for p in page_sizes]
+        heights = [p["height"] for p in page_sizes]
+
+        # 宽度聚类：找主流单页宽度（选择最高频的窄页宽度）
+        widths_sorted = sorted(widths)
+        width_clusters = []
+        current_cluster = [widths_sorted[0]]
+
+        for w in widths_sorted[1:]:
+            cluster_center = sum(current_cluster) / len(current_cluster)
+            if abs(w - cluster_center) / cluster_center <= BASELINE_WIDTH_TOLERANCE:
+                current_cluster.append(w)
+            else:
+                width_clusters.append(current_cluster)
+                current_cluster = [w]
+        width_clusters.append(current_cluster)
+
+        # 选择最窄的大聚类作为单页基线（双页通常更宽）
+        width_clusters_sorted = sorted(width_clusters, key=lambda c: sum(c) / len(c))
+        baseline_width_cluster = max(width_clusters_sorted[:max(1, len(width_clusters_sorted)//2 + 1)], key=len)
+        baseline_width = sum(baseline_width_cluster) / len(baseline_width_cluster)
+
+        # 高度聚类：找主流单页高度
+        heights_sorted = sorted(heights)
+        height_clusters = []
+        current_cluster = [heights_sorted[0]]
+
+        for h in heights_sorted[1:]:
+            cluster_center = sum(current_cluster) / len(current_cluster)
+            if abs(h - cluster_center) / cluster_center <= BASELINE_HEIGHT_TOLERANCE:
+                current_cluster.append(h)
+            else:
+                height_clusters.append(current_cluster)
+                current_cluster = [h]
+        height_clusters.append(current_cluster)
+
+        baseline_height_cluster = max(height_clusters, key=len)
+        baseline_height = sum(baseline_height_cluster) / len(baseline_height_cluster)
+
+        # 统计宽页占比
+        wide_count = sum(1 for p in page_sizes if p["width"] > baseline_width * WIDE_PAGE_RATIO_MIN)
+        wide_ratio = wide_count / len(page_sizes)
+
+        return {
+            "baseline_width": baseline_width,
+            "baseline_height": baseline_height,
+            "wide_page_ratio": wide_ratio,
+            "is_landscape_doc": wide_ratio > LANDSCAPE_DOC_THRESHOLD,
+        }
+
     def _detect_double_page(self, image: Image.Image) -> Dict:
         """
         检测图片是否为双页
 
-        基于 v2 规则：
-        1. 宽高比 < 1.30：单页
-        2. 宽高比 >= 1.30 且中间亮度比 >= 1.15：双页
-        3. 宽高比 >= 1.34：双页（即使无明显中缝）
+        基于文档级基线 + 多信号确认策略：
+        1. 文档级保护：横向文档（>50%宽页）直接判定为单页
+        2. 相对尺寸检测：页面宽度是否为基线的1.8-2.2倍
+        3. 信号1：中缝检测（中间区域亮度/密度明显不同）
+        4. 信号2：左右半区独立性检测（都有实质性内容）
+        5. 信号3：左右密度相似性检测（都是书页，密度应相近）
 
         Args:
             image: PIL Image 对象
 
         Returns:
-            检测结果字典：
-            {
-                "is_double": True/False,
-                "aspect_ratio": 宽高比,
-                "brightness_ratio": 中间亮度比,
-                "confidence": "高"/"中"/"低",
-                "reason": "判断依据"
-            }
+            检测结果字典
         """
         if not HAS_IMAGE_LIBS:
-            # 没有图像库，默认返回单页
             return {
                 "is_double": False,
                 "aspect_ratio": 0,
@@ -567,17 +680,56 @@ class PdfResizer:
 
             aspect_ratio = width / height
 
-            # 规则1: 宽高比过小，直接判定为单页
-            if aspect_ratio < ASPECT_RATIO_MIN:
+            # 文档级保护：如果文档本身就是横向书（大部分页面都宽）
+            if self.is_landscape_doc:
                 return {
                     "is_double": False,
                     "aspect_ratio": aspect_ratio,
                     "brightness_ratio": 0,
                     "confidence": "高",
-                    "reason": f"宽高比{aspect_ratio:.3f}<{ASPECT_RATIO_MIN}，竖版单页"
+                    "reason": "文档级保护：横向文档不拆分"
                 }
 
-            # 检测中间亮度
+            # 无基线：无法判断相对尺寸，默认单页
+            if self.baseline_width is None:
+                return {
+                    "is_double": False,
+                    "aspect_ratio": aspect_ratio,
+                    "brightness_ratio": 0,
+                    "confidence": "低",
+                    "reason": "无文档基线，跳过双页检测"
+                }
+
+            # 相对尺寸检测：宽度是否为基线的1.8-2.2倍
+            width_ratio = width / self.baseline_width
+            height_ratio = height / self.baseline_height if self.baseline_height else 0
+
+            if not (WIDE_PAGE_RATIO_MIN <= width_ratio <= WIDE_PAGE_RATIO_MAX):
+                # 宽度不在1.8-2.2倍范围内，直接判定为单页
+                return {
+                    "is_double": False,
+                    "aspect_ratio": aspect_ratio,
+                    "width_ratio": width_ratio,
+                    "height_ratio": height_ratio,
+                    "brightness_ratio": 0,
+                    "confidence": "高",
+                    "reason": f"宽度比{width_ratio:.2f}不在[{WIDE_PAGE_RATIO_MIN:.1f}, {WIDE_PAGE_RATIO_MAX:.1f}]倍范围内"
+                }
+
+            # 高度必须匹配基线（±15%）
+            if not (1 - HEIGHT_MATCH_TOLERANCE <= height_ratio <= 1 + HEIGHT_MATCH_TOLERANCE):
+                return {
+                    "is_double": False,
+                    "aspect_ratio": aspect_ratio,
+                    "width_ratio": width_ratio,
+                    "height_ratio": height_ratio,
+                    "brightness_ratio": 0,
+                    "confidence": "中",
+                    "reason": f"高度比{height_ratio:.2f}不匹配基线"
+                }
+
+            # 信号1：中缝检测（中间明显更亮或更暗）
+            # 兼顾不同扫描件：用相对比值 + 绝对差值双条件
             gray = image.convert("L")
             img_array = np.array(gray)
             h, w = img_array.shape
@@ -595,35 +747,71 @@ class PdfResizer:
             side_brightness = (float(np.mean(left_region)) + float(np.mean(right_region))) / 2
             brightness_ratio = center_brightness / side_brightness if side_brightness > 0 else 1.0
 
-            # 规则2: 宽高比足够 + 中间明显更亮
-            if brightness_ratio >= BRIGHTNESS_THRESHOLD:
-                confidence = "高" if brightness_ratio >= 1.30 else "中"
+            center_side_diff = abs(center_brightness - side_brightness)
+            has_seam_signal = (brightness_ratio >= 1.06) or (brightness_ratio <= 0.94) or (center_side_diff >= 6.0)
+
+            # 信号2：左右半区独立性
+            mid_x = w // 2
+            left_half = img_array[:, :mid_x]
+            right_half = img_array[:, mid_x:]
+
+            left_density = float(np.mean(left_half))
+            right_density = float(np.mean(right_half))
+            side_density = (left_density + right_density) / 2
+
+            left_independent = left_density < side_density * 0.85  # 左半区比平均暗
+            right_independent = right_density < side_density * 0.85  # 右半区比平均暗
+            both_independent = left_independent and right_independent
+
+            # 信号3：左右密度相似性（都是书页，密度应相近）
+            density_ratio = max(left_density, right_density) / min(left_density, right_density) if min(left_density, right_density) > 0 else 1.0
+            density_similar = density_ratio < 1.5  # 密度相差不超过50%
+
+            # 综合判断：
+            # - 强候选（宽度约为基线 2x 且高度匹配）允许仅凭密度相似就拆分
+            # - 其他候选需要至少 2 个信号确认
+            signals_met = sum([has_seam_signal, both_independent, density_similar])
+
+            strong_candidate = (
+                (1.9 <= width_ratio <= 2.2) and
+                (1 - HEIGHT_MATCH_TOLERANCE <= height_ratio <= 1 + HEIGHT_MATCH_TOLERANCE)
+            )
+
+            if strong_candidate and density_similar:
+                confidence = "高" if signals_met >= 2 else "中"
                 return {
                     "is_double": True,
                     "aspect_ratio": aspect_ratio,
+                    "width_ratio": width_ratio,
+                    "height_ratio": height_ratio,
                     "brightness_ratio": brightness_ratio,
                     "confidence": confidence,
-                    "reason": f"宽高比{aspect_ratio:.3f}≥{ASPECT_RATIO_MIN}，中间亮度比{brightness_ratio:.3f}≥{BRIGHTNESS_THRESHOLD}，存在中缝"
+                    "reason": f"宽度比{width_ratio:.2f}x基线(强候选) + 密度相似({density_similar})"
                 }
 
-            # 规则3: 宽高比非常大，即使无明显中缝也判定为双页
-            if aspect_ratio >= ASPECT_RATIO_STRONG:
+            if signals_met >= 2:
+                # 至少2个信号确认
+                confidence = "高" if signals_met == 3 else "中"
                 return {
                     "is_double": True,
                     "aspect_ratio": aspect_ratio,
+                    "width_ratio": width_ratio,
+                    "height_ratio": height_ratio,
+                    "brightness_ratio": brightness_ratio,
+                    "confidence": confidence,
+                    "reason": f"宽度比{width_ratio:.2f}x基线 + 中缝信号({has_seam_signal}) + 左右独立({both_independent}) + 密度相似({density_similar})"
+                }
+            else:
+                # 信号不足
+                return {
+                    "is_double": False,
+                    "aspect_ratio": aspect_ratio,
+                    "width_ratio": width_ratio,
+                    "height_ratio": height_ratio,
                     "brightness_ratio": brightness_ratio,
                     "confidence": "中",
-                    "reason": f"宽高比{aspect_ratio:.3f}≥{ASPECT_RATIO_STRONG}，纯色/无明显中缝双页"
+                    "reason": f"宽度比{width_ratio:.2f}x基线但信号不足({signals_met}/3)"
                 }
-
-            # 其他情况：单页
-            return {
-                "is_double": False,
-                "aspect_ratio": aspect_ratio,
-                "brightness_ratio": brightness_ratio,
-                "confidence": "中",
-                "reason": f"宽高比{aspect_ratio:.3f}，中间亮度比{brightness_ratio:.3f}，判定为单页"
-            }
 
         except Exception as e:
             logger.warning(f"双页检测失败: {e}")
