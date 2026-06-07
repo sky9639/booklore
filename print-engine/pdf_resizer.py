@@ -279,6 +279,7 @@ class PdfResizer:
         total_pages = len(src_doc)
 
         # 预扫描：计算文档级单页基线（用于泛化性双页检测）
+        self.emit_progress(12, "正在分析页面结构...")
         profile = self._build_document_profile(src_doc)
         self.baseline_width = profile.get("baseline_width")
         self.baseline_height = profile.get("baseline_height")
@@ -316,6 +317,7 @@ class PdfResizer:
         # 处理每一页
         for page_num in range(total_pages):
             page_num_display = page_num + 1
+            src_page = None
 
             # 计算当前页的进度（单调递增，不跳动）
             current_progress = 5 + int((page_num / total_pages) * 83)
@@ -326,32 +328,62 @@ class PdfResizer:
                 # === 阶段1: 提取页面 ===
                 self.emit_progress(
                     current_progress,
-                    f"[{page_num_display}/{total_pages}] 提取页面内容 | 双页:{double_count} 单页:{single_count}",
+                    f"[{page_num_display}/{total_pages}] 提取页面内容 | 已处理:{double_count + single_count} | 双页:{double_count} 单页:{single_count} 错误:{error_count}",
                     current_page=page_num_display,
                     total_pages=total_pages,
                     sub_stage="extracting",
                     double_pages_count=double_count,
                     single_pages_count=single_count,
+                    error_pages_count=error_count,
                 )
 
                 page_image, source_type = self._get_main_image_from_page(src_doc, src_page)
 
                 if page_image is None:
-                    # 无法获取图片，记录错误并添加空白页
-                    logger.warning(f"[{page_num_display}/{total_pages}] 无法提取图片，使用空白页")
+                    logger.warning(
+                        f"[{page_num_display}/{total_pages}] 主图提取失败，回退整页渲染"
+                    )
                     error_count += 1
-                    dst_doc.new_page(width=target_w_pt, height=target_h_pt)
+                    single_count += 1
+                    self.emit_progress(
+                        current_progress,
+                        f"[{page_num_display}/{total_pages}] 主图提取失败，回退整页渲染 | 已处理:{double_count + single_count} | 双页:{double_count} 单页:{single_count} 错误:{error_count}",
+                        current_page=page_num_display,
+                        total_pages=total_pages,
+                        sub_stage="fallback_render",
+                        double_pages_count=double_count,
+                        single_pages_count=single_count,
+                        error_pages_count=error_count,
+                    )
+                    self._render_page_to_target(
+                        src_page,
+                        dst_doc,
+                        target_rect,
+                        target_w_pt,
+                        target_h_pt,
+                    )
+                    self.emit_progress(
+                        current_progress,
+                        f"[{page_num_display}/{total_pages}] ✅ 完成 | 本页:单页(回退渲染) | 来源:{source_type} | 双页:{double_count} 单页:{single_count} 错误:{error_count}",
+                        current_page=page_num_display,
+                        total_pages=total_pages,
+                        sub_stage="page_done",
+                        double_pages_count=double_count,
+                        single_pages_count=single_count,
+                        error_pages_count=error_count,
+                    )
                     continue
 
                 # === 阶段2: 双页检测 ===
                 self.emit_progress(
                     current_progress,
-                    f"[{page_num_display}/{total_pages}] 检测页面类型 | 双页:{double_count} 单页:{single_count}",
+                    f"[{page_num_display}/{total_pages}] 检测页面类型 | 已处理:{double_count + single_count} | 双页:{double_count} 单页:{single_count} 错误:{error_count}",
                     current_page=page_num_display,
                     total_pages=total_pages,
                     sub_stage="detecting",
                     double_pages_count=double_count,
                     single_pages_count=single_count,
+                    error_pages_count=error_count,
                 )
 
                 detection_result = self._detect_double_page(page_image)
@@ -422,6 +454,19 @@ class PdfResizer:
                     right_bytes.seek(0)
                     dst_page_right.insert_image(target_rect, stream=right_bytes, keep_proportion=False)
 
+                    self.emit_progress(
+                        current_progress,
+                        f"[{page_num_display}/{total_pages}] ✅ 完成 | 本页:双页拆分 | 来源:{source_type} | 双页:{double_count} 单页:{single_count} 错误:{error_count}",
+                        current_page=page_num_display,
+                        total_pages=total_pages,
+                        sub_stage="page_done",
+                        is_double=True,
+                        detection_info=detection_result,
+                        double_pages_count=double_count,
+                        single_pages_count=single_count,
+                        error_pages_count=error_count,
+                    )
+
                 else:
                     # === 单页处理 ===
                     single_count += 1
@@ -445,11 +490,7 @@ class PdfResizer:
                     )
 
                     content_bbox = self._detect_content_bbox(src_page)
-
-                    if content_bbox:
-                        clip_rect = content_bbox
-                    else:
-                        clip_rect = src_page.rect
+                    clip_rect = content_bbox if content_bbox else src_page.rect
 
                     # 阶段2.2: 渲染内容
                     self.emit_progress(
@@ -462,10 +503,6 @@ class PdfResizer:
                         double_pages_count=double_count,
                         single_pages_count=single_count,
                     )
-
-                    zoom = 2.0
-                    mat = fitz.Matrix(zoom, zoom)
-                    pix = src_page.get_pixmap(matrix=mat, clip=clip_rect)
 
                     # 阶段2.3: 插入新页面
                     sub_progress = current_progress
@@ -480,11 +517,26 @@ class PdfResizer:
                         single_pages_count=single_count,
                     )
 
-                    dst_page = dst_doc.new_page(width=target_w_pt, height=target_h_pt)
-                    dst_page.insert_image(target_rect, pixmap=pix, keep_proportion=False)
+                    self._render_page_to_target(
+                        src_page,
+                        dst_doc,
+                        target_rect,
+                        target_w_pt,
+                        target_h_pt,
+                        clip_rect=clip_rect,
+                    )
 
-                    # 释放内存
-                    pix = None
+                    self.emit_progress(
+                        current_progress,
+                        f"[{page_num_display}/{total_pages}] ✅ 完成 | 本页:单页 | 来源:{source_type} | 双页:{double_count} 单页:{single_count} 错误:{error_count}",
+                        current_page=page_num_display,
+                        total_pages=total_pages,
+                        sub_stage="page_done",
+                        is_double=False,
+                        double_pages_count=double_count,
+                        single_pages_count=single_count,
+                        error_pages_count=error_count,
+                    )
 
                 # 本页完成（不再单独emit，避免进度跳动）
 
@@ -494,20 +546,32 @@ class PdfResizer:
 
                 self.emit_progress(
                     current_progress,
-                    f"[{page_num_display}/{total_pages}] ❌ 失败: {str(e)} | 双页:{double_count} 单页:{single_count}",
+                    f"[{page_num_display}/{total_pages}] ❌ 失败: {str(e)} | 双页:{double_count} 单页:{single_count} 错误:{error_count}",
                     current_page=page_num_display,
                     total_pages=total_pages,
                     sub_stage="error",
                     error=str(e),
                     double_pages_count=double_count,
                     single_pages_count=single_count,
+                    error_pages_count=error_count,
                 )
 
-                # 出错时添加空白页
                 try:
-                    dst_doc.new_page(width=target_w_pt, height=target_h_pt)
+                    if src_page is not None:
+                        logger.warning(
+                            f"[{page_num_display}/{total_pages}] 发生异常，回退整页渲染"
+                        )
+                        self._render_page_to_target(
+                            src_page,
+                            dst_doc,
+                            target_rect,
+                            target_w_pt,
+                            target_h_pt,
+                        )
+                    else:
+                        dst_doc.new_page(width=target_w_pt, height=target_h_pt)
                 except Exception:
-                    pass
+                    dst_doc.new_page(width=target_w_pt, height=target_h_pt)
 
         # 关闭原文档
         src_doc.close()
@@ -548,6 +612,21 @@ class PdfResizer:
             "error_count": error_count,
         }
 
+    def _render_page_to_target(
+        self,
+        src_page: fitz.Page,
+        dst_doc: fitz.Document,
+        target_rect: fitz.Rect,
+        target_w_pt: float,
+        target_h_pt: float,
+        clip_rect: Optional[fitz.Rect] = None,
+    ) -> None:
+        """将源页面渲染并插入到目标文档。"""
+        render_rect = clip_rect if clip_rect else src_page.rect
+        pix = src_page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), clip=render_rect)
+        dst_page = dst_doc.new_page(width=target_w_pt, height=target_h_pt)
+        dst_page.insert_image(target_rect, pixmap=pix, keep_proportion=False)
+
     def _build_document_profile(self, doc: fitz.Document) -> Dict[str, Any]:
         """
         文档级预扫描：基于页面主图宽度计算主流单页基线
@@ -574,6 +653,20 @@ class PdfResizer:
 
         for page_num in range(sample_size):
             try:
+                if self.progress_callback and (
+                    page_num == 0 or
+                    (page_num + 1) % 10 == 0 or
+                    page_num == sample_size - 1
+                ):
+                    profile_progress = 12 + int(((page_num + 1) / sample_size) * 3)
+                    self.emit_progress(
+                        profile_progress,
+                        f"正在分析页面结构... [{page_num + 1}/{sample_size}]",
+                        current_page=page_num + 1,
+                        total_pages=sample_size,
+                        sub_stage="profiling",
+                    )
+
                 page = doc[page_num]
                 page_image, _ = self._get_main_image_from_page(doc, page)
                 if page_image:

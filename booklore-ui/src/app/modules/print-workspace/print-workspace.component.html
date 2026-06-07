@@ -86,7 +86,11 @@
           </div>
 
           <!-- 统计信息（单独一行，小号） -->
-          <div class="progress-stats" *ngIf="resizeDoubleCount > 0 || resizeSingleCount > 0">
+          <div class="progress-stats">
+            <span class="stat-item">
+              已处理 {{ resizeDoubleCount + resizeSingleCount }}
+            </span>
+            <span class="stat-divider">|</span>
             <span class="stat-item stat-double">
               <i class="pi pi-clone"></i> 双页 {{ resizeDoubleCount }}
             </span>
@@ -94,8 +98,8 @@
             <span class="stat-item stat-single">
               <i class="pi pi-file"></i> 单页 {{ resizeSingleCount }}
             </span>
-            <span class="stat-item stat-error" *ngIf="resizeErrorCount > 0">
-              <span class="stat-divider">|</span>
+            <span class="stat-divider">|</span>
+            <span class="stat-item stat-error">
               <i class="pi pi-exclamation-triangle"></i> 错误 {{ resizeErrorCount }}
             </span>
           </div>

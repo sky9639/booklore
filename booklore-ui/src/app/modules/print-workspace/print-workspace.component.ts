@@ -1713,15 +1713,20 @@ export class PrintWorkspaceComponent implements OnInit, OnDestroy {
         const isKeyNode =
           // 关键进度节点
           data.progress === 10 ||
+          data.progress === 12 ||
+          data.progress === 15 ||
           data.progress === 50 ||
           data.progress === 88 ||
           data.progress === 95 ||
           // 特殊子阶段
+          data.sub_stage === 'profiling' ||
           data.sub_stage === 'done' ||
           data.sub_stage === 'error' ||
           data.sub_stage === 'splitting' ||
           data.sub_stage === 'formatting_left' ||
-          data.sub_stage === 'formatting_right';
+          data.sub_stage === 'formatting_right' ||
+          data.sub_stage === 'page_done' ||
+          data.sub_stage === 'fallback_render';
 
         if (isKeyNode) {
           this.addOperationLog(data.stage, 'pdf', {
