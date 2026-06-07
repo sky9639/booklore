@@ -18,6 +18,8 @@ import org.jsoup.select.Elements;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -46,6 +48,10 @@ public class AmazonBookParser implements BookParser, DetailedMetadataProvider {
     }
 
     private static final int COUNT_DETAILED_METADATA_TO_GET = 3;
+    private static final long DETAIL_FETCH_DELAY_WITH_COOKIE_MIN_MS = 150;
+    private static final long DETAIL_FETCH_DELAY_WITH_COOKIE_MAX_EXCLUSIVE_MS = 351;
+    private static final long DETAIL_FETCH_DELAY_WITHOUT_COOKIE_MIN_MS = 500;
+    private static final long DETAIL_FETCH_DELAY_WITHOUT_COOKIE_MAX_EXCLUSIVE_MS = 1501;
     private static final String BASE_BOOK_URL_SUFFIX = "/dp/";
     private static final Pattern NON_DIGIT_PATTERN = Pattern.compile("[^\\d]");
     private static final Pattern SERIES_FORMAT_PATTERN = Pattern.compile("Book (\\d+(?:\\.\\d+)?) of (\\d+)");
@@ -54,6 +60,9 @@ public class AmazonBookParser implements BookParser, DetailedMetadataProvider {
     private static final Pattern DP_SEPARATOR_PATTERN = Pattern.compile("/dp/");
     private static final Pattern REVIEWED_IN_ON_PATTERN = Pattern.compile("(?i)(?:Reviewed in|Rezension aus|Beoordeeld in|Recensie uit|Commenté en|Recensito in|Revisado en)\\s+(.+?)\\s+(?:on|vom|op|le|il|el)\\s+(.+)");
     private static final Pattern JAPANESE_REVIEW_DATE_PATTERN = Pattern.compile("(\\d{4}年\\d{1,2}月\\d{1,2}日).+");
+    private static final Pattern TRAILING_FILE_INDEX_PATTERN = Pattern.compile("(?:[_\\-]+\\d{1,3})+$");
+    private static final Pattern TRAILING_FILE_MARKER_PATTERN = Pattern.compile("(?i)(?:\\s+(?:optimized|retail|scan|scanned|ocr))+$|(?:已优化|优化版|修复版|扫描版|文字版)+$");
+    private static final Pattern MULTIPLE_SPACES_PATTERN = Pattern.compile("\\s+");
     private static final String[] TITLE_SELECTORS = {"#productTitle", "#ebooksProductTitle", "h1#title", "span#productTitle"};
     private static final String[] DATE_PATTERNS = {
             "MMMM d, yyyy", "d MMMM yyyy", "d. MMMM yyyy", "MMM d, yyyy",
@@ -109,6 +118,7 @@ public class AmazonBookParser implements BookParser, DetailedMetadataProvider {
         if (amazonBookIds == null || amazonBookIds.isEmpty()) {
             return Collections.emptyList();
         }
+        boolean hasAmazonCookie = hasAmazonCookie();
         List<BookMetadata> results = new ArrayList<>();
         for (int i = 0; i < amazonBookIds.size() && results.size() < COUNT_DETAILED_METADATA_TO_GET; i++) {
             try {
@@ -117,7 +127,7 @@ public class AmazonBookParser implements BookParser, DetailedMetadataProvider {
                     break;
                 }
                 if (i > 0) {
-                    Thread.sleep(ThreadLocalRandom.current().nextLong(500, 1501));
+                    sleepBeforeDetailFetch(hasAmazonCookie);
                 }
                 BookMetadata metadata = getBookMetadata(amazonBookIds.get(i));
                 if (metadata != null) {
@@ -180,6 +190,17 @@ public class AmazonBookParser implements BookParser, DetailedMetadataProvider {
                     .build());
         }
         return previews;
+    }
+
+    private void sleepBeforeDetailFetch(boolean hasAmazonCookie) throws InterruptedException {
+        long minDelay = hasAmazonCookie ? DETAIL_FETCH_DELAY_WITH_COOKIE_MIN_MS : DETAIL_FETCH_DELAY_WITHOUT_COOKIE_MIN_MS;
+        long maxDelayExclusive = hasAmazonCookie ? DETAIL_FETCH_DELAY_WITH_COOKIE_MAX_EXCLUSIVE_MS : DETAIL_FETCH_DELAY_WITHOUT_COOKIE_MAX_EXCLUSIVE_MS;
+        Thread.sleep(ThreadLocalRandom.current().nextLong(minDelay, maxDelayExclusive));
+    }
+
+    private boolean hasAmazonCookie() {
+        String amazonCookie = appSettingService.getAppSettings().getMetadataProviderSettings().getAmazon().getCookie();
+        return amazonCookie != null && !amazonCookie.isBlank();
     }
 
     @Override
@@ -321,43 +342,58 @@ public class AmazonBookParser implements BookParser, DetailedMetadataProvider {
         String domain = appSettingService.getAppSettings().getMetadataProviderSettings().getAmazon().getDomain();
         String isbnCleaned = ParserUtils.cleanIsbn(fetchMetadataRequest.getIsbn());
         if (isbnCleaned != null && !isbnCleaned.isEmpty()) {
-            String url = "https://www.amazon." + domain + "/s?k=" + fetchMetadataRequest.getIsbn();
+            String url = buildAmazonBaseUrl(domain) + "/s?k=" + URLEncoder.encode(isbnCleaned, StandardCharsets.UTF_8);
             log.info("Amazon Query URL (ISBN): {}", url);
             return url;
         }
 
         StringBuilder searchTerm = new StringBuilder(256);
 
-        String title = fetchMetadataRequest.getTitle();
-        if (title != null && !title.isEmpty()) {
-            searchTerm.append(cleanSearchTerm(title));
+        String title = normalizeSearchTerm(fetchMetadataRequest.getTitle());
+        if (!title.isEmpty()) {
+            searchTerm.append(title);
         } else if (book.getPrimaryFile() != null && book.getPrimaryFile().getFileName() != null) {
             String filename = BookUtils.cleanAndTruncateSearchTerm(BookUtils.cleanFileName(book.getPrimaryFile().getFileName()));
+            filename = normalizeSearchTerm(filename);
             if (!filename.isEmpty()) {
-                searchTerm.append(cleanSearchTerm(filename));
+                searchTerm.append(filename);
             }
         }
 
-        String author = fetchMetadataRequest.getAuthor();
-        if (author != null && !author.isEmpty()) {
+        String author = normalizeSearchTerm(fetchMetadataRequest.getAuthor());
+        if (!author.isEmpty()) {
             if (!searchTerm.isEmpty()) {
                 searchTerm.append(" ");
             }
-            searchTerm.append(cleanSearchTerm(author));
+            searchTerm.append(author);
         }
 
         if (searchTerm.isEmpty()) {
             return null;
         }
 
-        String encodedSearchTerm = searchTerm.toString().replace(" ", "+");
-        String url = "https://www.amazon." + domain + "/s?k=" + encodedSearchTerm;
+        String encodedSearchTerm = URLEncoder.encode(searchTerm.toString(), StandardCharsets.UTF_8);
+        String url = buildAmazonBaseUrl(domain) + "/s?k=" + encodedSearchTerm;
         log.info("Amazon Query URL: {}", url);
         return url;
     }
 
-    private String cleanSearchTerm(String text) {
-        return Arrays.stream(text.split(" "))
+    private String buildAmazonBaseUrl(String domain) {
+        return "https://www.amazon." + domain;
+    }
+
+    private String normalizeSearchTerm(String text) {
+        if (text == null || text.isBlank()) {
+            return "";
+        }
+
+        String cleaned = text;
+        cleaned = TRAILING_FILE_INDEX_PATTERN.matcher(cleaned).replaceAll("");
+        cleaned = cleaned.replace('_', ' ').replace('-', ' ');
+        cleaned = TRAILING_FILE_MARKER_PATTERN.matcher(cleaned).replaceAll("");
+        cleaned = MULTIPLE_SPACES_PATTERN.matcher(cleaned).replaceAll(" ").trim();
+
+        return Arrays.stream(cleaned.split(" "))
                 .map(word -> NON_ALPHANUMERIC_PATTERN.matcher(word).replaceAll("").trim())
                 .filter(word -> !word.isEmpty())
                 .collect(Collectors.joining(" "));
@@ -804,39 +840,65 @@ public class AmazonBookParser implements BookParser, DetailedMetadataProvider {
             String amazonCookie = appSettingService.getAppSettings().getMetadataProviderSettings().getAmazon().getCookie();
 
             LocaleInfo localeInfo = getLocaleInfoForDomain(domain);
+            String amazonBaseUrl = buildAmazonBaseUrl(domain);
 
             Connection connection = Jsoup.connect(url)
-                    .header("accept", "text/html, application/json")
+                    .header("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
                     .header("accept-language", localeInfo.acceptLanguage)
-                    .header("content-type", "application/json")
-                    .header("device-memory", "8")
-                    .header("downlink", "10")
-                    .header("dpr", "2")
-                    .header("ect", "4g")
-                    .header("origin", "https://www.amazon." + domain)
-                    .header("priority", "u=1, i")
-                    .header("rtt", "50")
-                    .header("sec-ch-device-memory", "8")
-                    .header("sec-ch-dpr", "2")
+                    .header("cache-control", "no-cache")
+                    .header("pragma", "no-cache")
+                    .header("referer", amazonBaseUrl + "/")
                     .header("sec-ch-ua", "\"Google Chrome\";v=\"137\", \"Chromium\";v=\"137\", \"Not_A Brand\";v=\"24\"")
                     .header("sec-ch-ua-mobile", "?0")
-                    .header("sec-ch-ua-platform", "\"macOS\"")
-                    .header("sec-ch-viewport-width", "1170")
-                    .header("sec-fetch-dest", "empty")
-                    .header("sec-fetch-mode", "cors")
-                    .header("sec-fetch-site", "same-origin")
-                    .header("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36")
-                    .header("viewport-width", "1170")
-                    .header("x-amz-amabot-click-attributes", "disable")
-                    .header("x-requested-with", "XMLHttpRequest")
+                    .header("sec-ch-ua-platform", "\"Windows\"")
+                    .header("sec-fetch-dest", "document")
+                    .header("sec-fetch-mode", "navigate")
+                    .header("sec-fetch-site", "none")
+                    .header("sec-fetch-user", "?1")
+                    .header("upgrade-insecure-requests", "1")
+                    .header("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36")
+                    .followRedirects(true)
+                    .timeout(20000)
                     .method(Connection.Method.GET);
 
             if (amazonCookie != null && !amazonCookie.isBlank()) {
                 connection.header("cookie", amazonCookie);
+                connection.cookies(parseCookieHeader(amazonCookie));
             }
 
             Connection.Response response = connection.execute();
-            return response.parse();
+            Document doc = response.parse();
+            String pageTitle = doc.title();
+
+            if (isAmazonBlockedPage(doc)) {
+                log.info(
+                        "Amazon anti-bot page detected. Status={}, Title='{}', CookiePresent={}, URL={} ",
+                        response.statusCode(),
+                        pageTitle,
+                        amazonCookie != null && !amazonCookie.isBlank(),
+                        url
+                );
+                throw new AmazonAntiScrapingException("Amazon anti-bot page");
+            }
+
+            boolean searchRequest = url.contains("/s?k=");
+            boolean hasExpectedContent = searchRequest
+                    ? doc.selectFirst("span[data-component-type=s-search-results]") != null
+                    : Arrays.stream(TITLE_SELECTORS).anyMatch(selector -> doc.selectFirst(selector) != null);
+
+            if (!hasExpectedContent) {
+                log.warn(
+                        "Amazon response missing expected selectors. Status={}, Title='{}', SearchRequest={}, CookiePresent={}, URL={}, BodySnippet={}",
+                        response.statusCode(),
+                        pageTitle,
+                        searchRequest,
+                        amazonCookie != null && !amazonCookie.isBlank(),
+                        url,
+                        getBodySnippet(doc)
+                );
+            }
+
+            return doc;
         } catch (HttpStatusException e) {
             if (e.getStatusCode() == 503) {
                 log.info("Amazon service unavailable (503). Please note: this is NOT a Booklore bug. Likely causes include: rate-limiting or failed captcha. Action required: Update cookies or select an alternative metadata source in the Metadata 2 UI. URL: {}", url);
@@ -852,6 +914,42 @@ public class AmazonBookParser implements BookParser, DetailedMetadataProvider {
             log.warn("Amazon request failed for url: {} - {}", url, e.getMessage());
             throw new RuntimeException("Amazon request failed", e);
         }
+    }
+
+    private Map<String, String> parseCookieHeader(String cookieHeader) {
+        Map<String, String> cookies = new LinkedHashMap<>();
+        for (String part : cookieHeader.split(";")) {
+            String trimmed = part.trim();
+            int equalsIndex = trimmed.indexOf('=');
+            if (equalsIndex <= 0 || equalsIndex == trimmed.length() - 1) {
+                continue;
+            }
+            cookies.put(trimmed.substring(0, equalsIndex).trim(), trimmed.substring(equalsIndex + 1).trim());
+        }
+        return cookies;
+    }
+
+    private boolean isAmazonBlockedPage(Document doc) {
+        String title = Optional.ofNullable(doc.title()).orElse("").toLowerCase(Locale.ROOT);
+        String text = Optional.ofNullable(doc.body()).map(Element::text).orElse("");
+        String normalizedText = text.length() > 1500 ? text.substring(0, 1500) : text;
+        normalizedText = normalizedText.toLowerCase(Locale.ROOT);
+
+        return title.contains("robot check")
+                || title.contains("captcha")
+                || normalizedText.contains("enter the characters you see below")
+                || normalizedText.contains("sorry, we just need to make sure you're not a robot")
+                || normalizedText.contains("to discuss automated access to amazon data please contact")
+                || normalizedText.contains("type the characters you see in this image")
+                || normalizedText.contains("api-services-support@amazon.com");
+    }
+
+    private String getBodySnippet(Document doc) {
+        String text = Optional.ofNullable(doc.body()).map(Element::text).orElse("").replaceAll("\\s+", " ").trim();
+        if (text.length() > 280) {
+            return text.substring(0, 280);
+        }
+        return text;
     }
 
     private static LocaleInfo getLocaleInfoForDomain(String domain) {
