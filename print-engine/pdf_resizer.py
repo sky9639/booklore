@@ -414,8 +414,10 @@ class PdfResizer:
 
                     src_rect = src_page.rect
                     left_clip = fitz.Rect(0, 0, src_rect.width / 2, src_rect.height)
-                    dst_page_left = dst_doc.new_page(width=target_w_pt, height=target_h_pt)
-                    dst_page_left.show_pdf_page(target_rect, src_doc, page_num, clip=left_clip, keep_proportion=False)
+                    self._render_page_to_target(
+                        src_doc, page_num, dst_doc, target_rect,
+                        clip_rect=left_clip,
+                    )
 
                     # 阶段2.3: 格式化右页（矢量嵌入，保持原始分辨率）
                     self.emit_progress(
@@ -431,8 +433,10 @@ class PdfResizer:
                     )
 
                     right_clip = fitz.Rect(src_rect.width / 2, 0, src_rect.width, src_rect.height)
-                    dst_page_right = dst_doc.new_page(width=target_w_pt, height=target_h_pt)
-                    dst_page_right.show_pdf_page(target_rect, src_doc, page_num, clip=right_clip, keep_proportion=False)
+                    self._render_page_to_target(
+                        src_doc, page_num, dst_doc, target_rect,
+                        clip_rect=right_clip,
+                    )
 
                     self.emit_progress(
                         current_progress,
@@ -592,16 +596,133 @@ class PdfResizer:
         target_rect: fitz.Rect,
         clip_rect: Optional[fitz.Rect] = None,
     ) -> None:
-        """将源页面矢量内容嵌入目标文档（保持原始矢量分辨率）
+        """将源页面内容嵌入目标文档，智能选择渲染策略
 
-        使用 show_pdf_page 替代 get_pixmap + insert_image：
-        - 保留文字/矢量图形的原始锐度
-        - 不受 DPI 限制，输出分辨率由 PDF 阅读器决定
-        - 非等比拉伸由 PDF 阅读器层面的变换完成
+        策略选择：
+        - 对位图页面（漫画/扫描件）：提取嵌入图 → 升采样到 300DPI@目标尺寸 → 插入
+        - 对文字/矢量页面：用 show_pdf_page 矢量嵌入（保持原始锐度）
         """
-        render_clip = clip_rect if clip_rect else src_doc[page_num].rect
+        src_page = src_doc[page_num]
+        render_clip = clip_rect if clip_rect else src_page.rect
+
+        # 尝试位图升采样（对漫画/扫描件有效）
+        if self._try_render_raster_upscale(src_doc, src_page, dst_doc, target_rect, render_clip):
+            return
+
+        # 回退：矢量嵌入（保留文字/矢量图形原始锐度）
         dst_page = dst_doc.new_page(width=target_rect.width, height=target_rect.height)
         dst_page.show_pdf_page(target_rect, src_doc, page_num, clip=render_clip, keep_proportion=False)
+
+    def _try_render_raster_upscale(
+        self,
+        src_doc: fitz.Document,
+        src_page: fitz.Page,
+        dst_doc: fitz.Document,
+        target_rect: fitz.Rect,
+        render_clip: fitz.Rect,
+    ) -> bool:
+        """位图页面升采样：提取嵌入图 → 升采样到 300DPI@目标尺寸 → 插入
+
+        触发条件：
+        1. 页面有嵌入图片
+        2. 嵌入图有效 DPI < 250（源分辨率不足以支撑目标尺寸）
+           或页面文字极少（漫画/扫描件特征）
+
+        Returns:
+            True 表示已处理（插入升采样图片），False 回退到矢量嵌入
+        """
+        if not HAS_IMAGE_LIBS:
+            return False
+
+        try:
+            # 1. 检查嵌入图
+            images = src_page.get_images(full=True)
+            if not images:
+                return False
+
+            # 2. 找最大嵌入图
+            max_area = 0
+            best_image_data = None
+            for img in images:
+                xref = img[0]
+                base = src_doc.extract_image(xref)
+                area = base["width"] * base["height"]
+                if area > max_area:
+                    max_area = area
+                    best_image_data = base
+
+            if best_image_data is None:
+                return False
+
+            img_w, img_h = best_image_data["width"], best_image_data["height"]
+
+            # 3. 判断页面类型
+            text = src_page.get_text().strip()
+            page_w_mm = src_page.rect.width * 25.4 / 72
+            page_area_cm2 = (src_page.rect.width * 25.4 / 72) * (src_page.rect.height * 25.4 / 72) / 100
+            text_density = len(text) / max(page_area_cm2, 1)  # 字符/百平方厘米
+            effective_dpi = img_w / (page_w_mm / 25.4)
+
+            # 位图页面特征：有效DPI低 或 文字极少
+            is_raster_page = (effective_dpi < 250) or (text_density < 10)
+
+            if not is_raster_page:
+                return False
+
+            # 4. 计算目标像素尺寸（300 DPI @ 目标页面）
+            clip_w_mm = render_clip.width * 25.4 / 72
+            clip_h_mm = render_clip.height * 25.4 / 72
+            TARGET_DPI = 300
+            target_pix_w = int(clip_w_mm / 25.4 * TARGET_DPI)
+            target_pix_h = int(clip_h_mm / 25.4 * TARGET_DPI)
+
+            # 5. 加载图片
+            pil_img = Image.open(io.BytesIO(best_image_data["image"]))
+            if pil_img.mode != "RGB":
+                pil_img = pil_img.convert("RGB")
+
+            # 6. 如果 clip 不是整页（如双页拆分），裁剪对应区域
+            page_rect = src_page.rect
+            is_full_page = (
+                abs(render_clip.x0 - page_rect.x0) < 1
+                and abs(render_clip.y0 - page_rect.y0) < 1
+                and abs(render_clip.x1 - page_rect.x1) < 1
+                and abs(render_clip.y1 - page_rect.y1) < 1
+            )
+
+            if not is_full_page:
+                scale_x = img_w / page_rect.width
+                scale_y = img_h / page_rect.height
+                crop_box = (
+                    int(render_clip.x0 * scale_x),
+                    int(render_clip.y0 * scale_y),
+                    int(render_clip.x1 * scale_x),
+                    int(render_clip.y1 * scale_y),
+                )
+                pil_img = pil_img.crop(crop_box)
+
+            # 7. 升采样到目标分辨率（LANCZOS 高质量插值）
+            resized = pil_img.resize((target_pix_w, target_pix_h), Image.LANCZOS)
+
+            # 8. 轻度锐化补偿（Unsharp Mask），减少放大后的模糊感
+            from PIL import ImageFilter
+            resized = resized.filter(ImageFilter.UnsharpMask(radius=0.5, percent=80, threshold=2))
+
+            # 9. 插入目标页面
+            dst_page = dst_doc.new_page(width=target_rect.width, height=target_rect.height)
+            buf = io.BytesIO()
+            resized.save(buf, format="JPEG", quality=95)
+            dst_page.insert_image(target_rect, stream=buf.getvalue(), keep_proportion=False)
+
+            logger.info(
+                "位图升采样: %dx%d → %dx%dpx (源DPI=%.0f, 目标DPI=%d)",
+                img_w, img_h, target_pix_w, target_pix_h, effective_dpi, TARGET_DPI,
+            )
+            return True
+
+        except Exception as e:
+            logger.warning(f"位图升采样失败，回退矢量嵌入: {e}")
+            return False
 
     def _build_document_profile(self, doc: fitz.Document) -> Dict[str, Any]:
         """
