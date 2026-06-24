@@ -356,11 +356,7 @@ class PdfResizer:
                         error_pages_count=error_count,
                     )
                     self._render_page_to_target(
-                        src_page,
-                        dst_doc,
-                        target_rect,
-                        target_w_pt,
-                        target_h_pt,
+                        src_doc, page_num, dst_doc, target_rect,
                     )
                     self.emit_progress(
                         current_progress,
@@ -401,22 +397,9 @@ class PdfResizer:
                     # 更新计数
                     double_count += 1
 
-                    # 阶段2.1: 切分双页
-                    self.emit_progress(
-                        current_progress,
-                        f"[{page_num_display}/{total_pages}] ✂️ 切分双页 | 双页:{double_count} 单页:{single_count}",
-                        current_page=page_num_display,
-                        total_pages=total_pages,
-                        sub_stage="splitting",
-                        is_double=True,
-                        detection_info=detection_result,
-                        double_pages_count=double_count,
-                        single_pages_count=single_count,
-                    )
+                    # 阶段2.1: 切分双页并分别矢量嵌入到目标页面
 
-                    left_img, right_img = self._split_double_page_image(page_image)
-
-                    # 阶段2.2: 格式化左页
+                    # 阶段2.2: 格式化左页（矢量嵌入，保持原始分辨率）
                     self.emit_progress(
                         current_progress,
                         f"[{page_num_display}/{total_pages}] 格式化左页 | 双页:{double_count} 单页:{single_count}",
@@ -429,13 +412,12 @@ class PdfResizer:
                         single_pages_count=single_count,
                     )
 
+                    src_rect = src_page.rect
+                    left_clip = fitz.Rect(0, 0, src_rect.width / 2, src_rect.height)
                     dst_page_left = dst_doc.new_page(width=target_w_pt, height=target_h_pt)
-                    left_bytes = io.BytesIO()
-                    left_img.save(left_bytes, format="PNG")
-                    left_bytes.seek(0)
-                    dst_page_left.insert_image(target_rect, stream=left_bytes, keep_proportion=False)
+                    dst_page_left.show_pdf_page(target_rect, src_doc, page_num, clip=left_clip, keep_proportion=False)
 
-                    # 阶段2.3: 格式化右页
+                    # 阶段2.3: 格式化右页（矢量嵌入，保持原始分辨率）
                     self.emit_progress(
                         current_progress,
                         f"[{page_num_display}/{total_pages}] 格式化右页 | 双页:{double_count} 单页:{single_count}",
@@ -448,11 +430,9 @@ class PdfResizer:
                         single_pages_count=single_count,
                     )
 
+                    right_clip = fitz.Rect(src_rect.width / 2, 0, src_rect.width, src_rect.height)
                     dst_page_right = dst_doc.new_page(width=target_w_pt, height=target_h_pt)
-                    right_bytes = io.BytesIO()
-                    right_img.save(right_bytes, format="PNG")
-                    right_bytes.seek(0)
-                    dst_page_right.insert_image(target_rect, stream=right_bytes, keep_proportion=False)
+                    dst_page_right.show_pdf_page(target_rect, src_doc, page_num, clip=right_clip, keep_proportion=False)
 
                     self.emit_progress(
                         current_progress,
@@ -518,11 +498,7 @@ class PdfResizer:
                     )
 
                     self._render_page_to_target(
-                        src_page,
-                        dst_doc,
-                        target_rect,
-                        target_w_pt,
-                        target_h_pt,
+                        src_doc, page_num, dst_doc, target_rect,
                         clip_rect=clip_rect,
                     )
 
@@ -562,11 +538,7 @@ class PdfResizer:
                             f"[{page_num_display}/{total_pages}] 发生异常，回退整页渲染"
                         )
                         self._render_page_to_target(
-                            src_page,
-                            dst_doc,
-                            target_rect,
-                            target_w_pt,
-                            target_h_pt,
+                            src_doc, page_num, dst_doc, target_rect,
                         )
                     else:
                         dst_doc.new_page(width=target_w_pt, height=target_h_pt)
@@ -614,18 +586,22 @@ class PdfResizer:
 
     def _render_page_to_target(
         self,
-        src_page: fitz.Page,
+        src_doc: fitz.Document,
+        page_num: int,
         dst_doc: fitz.Document,
         target_rect: fitz.Rect,
-        target_w_pt: float,
-        target_h_pt: float,
         clip_rect: Optional[fitz.Rect] = None,
     ) -> None:
-        """将源页面渲染并插入到目标文档。"""
-        render_rect = clip_rect if clip_rect else src_page.rect
-        pix = src_page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), clip=render_rect)
-        dst_page = dst_doc.new_page(width=target_w_pt, height=target_h_pt)
-        dst_page.insert_image(target_rect, pixmap=pix, keep_proportion=False)
+        """将源页面矢量内容嵌入目标文档（保持原始矢量分辨率）
+
+        使用 show_pdf_page 替代 get_pixmap + insert_image：
+        - 保留文字/矢量图形的原始锐度
+        - 不受 DPI 限制，输出分辨率由 PDF 阅读器决定
+        - 非等比拉伸由 PDF 阅读器层面的变换完成
+        """
+        render_clip = clip_rect if clip_rect else src_doc[page_num].rect
+        dst_page = dst_doc.new_page(width=target_rect.width, height=target_rect.height)
+        dst_page.show_pdf_page(target_rect, src_doc, page_num, clip=render_clip, keep_proportion=False)
 
     def _build_document_profile(self, doc: fitz.Document) -> Dict[str, Any]:
         """
