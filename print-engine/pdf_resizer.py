@@ -624,12 +624,9 @@ class PdfResizer:
         """位图页面升采样：提取嵌入图 → 升采样到 300DPI@目标尺寸 → 插入
 
         触发条件：
-        1. 页面有嵌入图片
-        2. 嵌入图有效 DPI < 250（源分辨率不足以支撑目标尺寸）
-           或页面文字极少（漫画/扫描件特征）
+        嵌入图拉伸到目标页面宽度后的有效 DPI < 250（源图分辨率不足以支撑目标尺寸）
 
-        Returns:
-            True 表示已处理（插入升采样图片），False 回退到矢量嵌入
+        返回 False 则回退到 show_pdf_page 矢量嵌入（保留文字/矢量图形原始锐度）
         """
         if not HAS_IMAGE_LIBS:
             return False
@@ -656,25 +653,24 @@ class PdfResizer:
 
             img_w, img_h = best_image_data["width"], best_image_data["height"]
 
-            # 3. 判断页面类型
-            text = src_page.get_text().strip()
-            page_w_mm = src_page.rect.width * 25.4 / 72
-            page_area_cm2 = (src_page.rect.width * 25.4 / 72) * (src_page.rect.height * 25.4 / 72) / 100
-            text_density = len(text) / max(page_area_cm2, 1)  # 字符/百平方厘米
-            effective_dpi = img_w / (page_w_mm / 25.4)
+            # 3. 判断是否需要位图升采样
+            #    核心指标：嵌入图拉伸到目标页面尺寸后的有效 DPI
+            #    而非源页面 DPI —— 源页面大小与目标无关
+            #    例如：864px 图 @73mm 源页算得 ~300 DPI，但拉伸到 A4 只剩 ~104 DPI
+            #    此时仍应走升采样。反之 7680px 图拉伸到 A4 仍有 ~929 DPI，矢量嵌入即可。
+            target_w_inches = target_rect.width / 72
+            dpi_at_target = img_w / target_w_inches
 
-            # 位图页面特征：有效DPI低 或 文字极少
-            is_raster_page = (effective_dpi < 250) or (text_density < 10)
-
-            if not is_raster_page:
+            if dpi_at_target >= 250:
+                # 源图分辨率足以支撑目标尺寸，走矢量嵌入保持原始锐度
                 return False
 
             # 4. 计算目标像素尺寸（300 DPI @ 目标页面）
-            clip_w_mm = render_clip.width * 25.4 / 72
-            clip_h_mm = render_clip.height * 25.4 / 72
+            #    始终基于目标页面（A4）尺寸计算，而非源 clip 尺寸
+            #    否则源页小于目标时放大不足，大于目标时过度放大
             TARGET_DPI = 300
-            target_pix_w = int(clip_w_mm / 25.4 * TARGET_DPI)
-            target_pix_h = int(clip_h_mm / 25.4 * TARGET_DPI)
+            target_pix_w = int(target_rect.width / 72 * TARGET_DPI)
+            target_pix_h = int(target_rect.height / 72 * TARGET_DPI)
 
             # 5. 加载图片
             pil_img = Image.open(io.BytesIO(best_image_data["image"]))
@@ -715,8 +711,8 @@ class PdfResizer:
             dst_page.insert_image(target_rect, stream=buf.getvalue(), keep_proportion=False)
 
             logger.info(
-                "位图升采样: %dx%d → %dx%dpx (源DPI=%.0f, 目标DPI=%d)",
-                img_w, img_h, target_pix_w, target_pix_h, effective_dpi, TARGET_DPI,
+                "位图升采样: %dx%d -> %dx%dpx (拉伸后DPI=%.0f, 阈值=%d)",
+                img_w, img_h, target_pix_w, target_pix_h, dpi_at_target, TARGET_DPI,
             )
             return True
 
