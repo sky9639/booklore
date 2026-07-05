@@ -609,9 +609,32 @@ class PdfResizer:
         if self._try_render_raster_upscale(src_doc, src_page, dst_doc, target_rect, render_clip):
             return
 
-        # 回退：矢量嵌入（保留文字/矢量图形原始锐度）
+        # 等比缩放，水平+垂直居中，保留原始边距比例
+        # 按源内容的边距比例计算目标边距，再在内部区域等比缩放
+        src_page_rect = src_page.rect
+        margin_ratio_x0 = render_clip.x0 / src_page_rect.width if src_page_rect.width > 0 else 0
+        margin_ratio_x1 = (src_page_rect.width - render_clip.x1) / src_page_rect.width if src_page_rect.width > 0 else 0
+        margin_ratio_y0 = render_clip.y0 / src_page_rect.height if src_page_rect.height > 0 else 0
+        margin_ratio_y1 = (src_page_rect.height - render_clip.y1) / src_page_rect.height if src_page_rect.height > 0 else 0
+
+        inner_x0 = target_rect.x0 + target_rect.width * margin_ratio_x0
+        inner_x1 = target_rect.x1 - target_rect.width * margin_ratio_x1
+        inner_y0 = target_rect.y0 + target_rect.height * margin_ratio_y0
+        inner_y1 = target_rect.y1 - target_rect.height * margin_ratio_y1
+        inner_rect = fitz.Rect(inner_x0, inner_y0, inner_x1, inner_y1)
+
+        # 在内部区域内等比缩放内容
+        scale_w = inner_rect.width / render_clip.width
+        scale_h = inner_rect.height / render_clip.height
+        scale = min(scale_w, scale_h)
+        new_w = render_clip.width * scale
+        new_h = render_clip.height * scale
+        x_off = inner_rect.x0 + (inner_rect.width - new_w) / 2.0
+        y_off = inner_rect.y0 + (inner_rect.height - new_h) / 2.0
+        dst_rect = fitz.Rect(x_off, y_off, x_off + new_w, y_off + new_h)
+
         dst_page = dst_doc.new_page(width=target_rect.width, height=target_rect.height)
-        dst_page.show_pdf_page(target_rect, src_doc, page_num, clip=render_clip, keep_proportion=False)
+        dst_page.show_pdf_page(dst_rect, src_doc, page_num, clip=render_clip, keep_proportion=False)
 
     def _try_render_raster_upscale(
         self,
@@ -635,6 +658,11 @@ class PdfResizer:
             # 1. 检查嵌入图
             images = src_page.get_images(full=True)
             if not images:
+                return False
+
+            # 1.5 混合页面（图文混排）跳过位图升采样，保留文字
+            text_blocks = [b for b in src_page.get_text("dict").get("blocks", []) if b.get("type") == 0]
+            if text_blocks:
                 return False
 
             # 2. 找最大嵌入图
